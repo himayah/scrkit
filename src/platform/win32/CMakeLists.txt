@@ -51,6 +51,20 @@ if(MINGW)
     # preprocessor instead sidesteps both problems in one go.
     set(CMAKE_RC_FLAGS
         "${CMAKE_RC_FLAGS} --preprocessor=${CMAKE_CXX_COMPILER} --preprocessor-arg=-E --preprocessor-arg=-xc-header --preprocessor-arg=-DRC_INVOKED")
+
+    # By default g++ links libstdc++/libgcc/libwinpthread dynamically, so the
+    # resulting .scr depends on libstdc++-6.dll / libgcc_s_seh-1.dll /
+    # libwinpthread-1.dll being present on the target machine -- they
+    # normally live next to the compiler, not on a plain end-user Windows
+    # install, which is exactly what produces
+    # "libstdc++-6.dll が見つからないため、コードの実行を続行できません" at
+    # runtime. Statically linking them in keeps the .scr a single
+    # self-contained file (要件.txt §1: 単一の .scr ファイルとしてビルド可能に
+    # する), which matters especially here since a screensaver's /c and /p
+    # invocations are launched by explorer.exe/the Settings app, not by the
+    # user directly, so a missing-DLL failure there can show no visible error
+    # at all instead of the loader dialog seen when double-clicking the file.
+    target_link_options(SpiralSuctionSaver PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
 
 target_link_libraries(SpiralSuctionSaver PRIVATE
