@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.15)
+project(SpiralSuctionSaver CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# When ON (default off), configure only the platform-independent core library
+# and its unit tests. This is what this project's Linux dev/CI environment
+# builds and runs via ctest, since the Win32/OpenGL target below only makes
+# sense on Windows.
+option(BUILD_CORE_TESTS_ONLY "Build only src/core and its unit tests (no Win32 target)" OFF)
+
+file(GLOB CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.cpp)
+add_library(spiral_core STATIC ${CORE_SOURCES})
+target_include_directories(spiral_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
+enable_testing()
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+add_executable(core_tests ${TEST_SOURCES})
+target_link_libraries(core_tests PRIVATE spiral_core)
+target_include_directories(core_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+add_test(NAME core_tests COMMAND core_tests)
+
+if(NOT BUILD_CORE_TESTS_ONLY AND WIN32)
+    add_subdirectory(src/platform/win32)
+endif()

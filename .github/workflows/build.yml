@@ -1,0 +1,43 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Real Windows build of the .scr, using the MSVC toolchain that ships with
+  # windows-latest runners. This is the project's integration/smoke test
+  # for the Win32/OpenGL code that cannot be compiled on Linux.
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CMake + MSVC)
+        run: cmake -S . -B build
+
+      - name: Build SpiralSuctionSaver.scr
+        run: cmake --build build --config Release
+
+      - name: Upload .scr artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpiralSuctionSaver-scr
+          path: build/src/platform/win32/Release/SpiralSuctionSaver.scr
+
+  # Platform-independent core logic (spiral math, state machine, config
+  # parsing, particle grid, GPU tier classification, ...) built and unit
+  # tested on Linux.
+  linux-core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (core + tests only)
+        run: cmake -S . -B build -DBUILD_CORE_TESTS_ONLY=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Run unit tests
+        run: ctest --test-dir build --output-on-failure

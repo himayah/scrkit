@@ -1,0 +1,10 @@
+# Build output (this project is built via out-of-source CMake builds)
+build/
+build-*/
+out/
+
+# Editor / OS cruft
+.vs/
+.vscode/
+*.user
+.DS_Store
