@@ -2,6 +2,7 @@
 build/
 build-*/
 out/
+*.scr
 
 # Editor / OS cruft
 .vs/
