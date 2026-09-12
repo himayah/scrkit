@@ -1,4 +1,14 @@
 // Settings dialog resource for the /c configuration screen (要件.txt §6, §9 Step 9).
+//
+// This file is saved as UTF-8 and contains literal Japanese text below
+// ("粒子数", "背景画像"). Without an explicit code page, both MSVC's rc.exe
+// and GNU windres fall back to interpreting non-ASCII bytes in the file
+// using the build machine's active ANSI code page, which corrupts (mojibake)
+// any UTF-8 multi-byte sequence that doesn't happen to also be valid in that
+// code page. #pragma code_page(65001) tells both compilers this file is
+// UTF-8, which both have supported since MSVC 2015 / binutils 2.30.
+#pragma code_page(65001)
+
 #include <windows.h>
 #include "resource.h"
 
