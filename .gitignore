@@ -8,3 +8,6 @@ out/
 .vscode/
 *.user
 .DS_Store
+
+# Local Claude Code session state (not project content)
+.claude/

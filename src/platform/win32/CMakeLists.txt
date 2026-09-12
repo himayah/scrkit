@@ -32,7 +32,16 @@ target_include_directories(SpiralSuctionSaver PRIVATE
 # only expand to their W form when UNICODE/_UNICODE are defined -- without
 # this they'd silently resolve to the A (ANSI) form and fail to compile
 # against wide-char arguments.
-target_compile_definitions(SpiralSuctionSaver PRIVATE UNICODE _UNICODE)
+#
+# NOMINMAX must be defined here (as a compiler flag, not just inside a
+# header) so it takes effect before the *first* <windows.h> inclusion in
+# every translation unit, however that file happens to reach it -- a header
+# guard means windows.h's own min/max macros, once defined by an earlier
+# unguarded include, cannot be "undone" by a later #define NOMINMAX. Without
+# this, `std::max`/`std::min` calls anywhere in the code get silently
+# mangled by those macros (MSVC reports it as a confusing
+# "illegal token on right side of '::'" syntax error).
+target_compile_definitions(SpiralSuctionSaver PRIVATE UNICODE _UNICODE NOMINMAX)
 
 if(MINGW)
     # windres's own built-in preprocessor does not predefine _WIN32/_WIN64,
