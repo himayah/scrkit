@@ -65,38 +65,52 @@ void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHei
     glDisable(GL_TEXTURE_2D);
 }
 
-void DrawIconBodiesBatched(const std::vector<DrawRect>& icons) {
-    if (icons.empty()) return;
-    glDisable(GL_TEXTURE_2D);
-    glColor4f(kIconColor[0], kIconColor[1], kIconColor[2], 1.0f);
-    glBegin(GL_QUADS); // one glBegin/glEnd for every icon (要件.txt §7)
-    for (const auto& r : icons) {
-        EmitQuad(r.x, r.y, r.w, r.h);
+namespace {
+// Draws one batch of rectangles either textured (sampling `captureTexture`
+// at each rect's own UV) or as a single flat fixed color, depending on
+// whether a capture texture is available. Shared by icon and window body
+// drawing so both get the same fallback behavior.
+void DrawCapturedOrSolidBatch(GLuint captureTexture, const std::vector<DrawCapturedRect>& rects,
+                               const float solidColor[4]) {
+    if (rects.empty()) return;
+
+    if (captureTexture != 0) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, captureTexture);
+        glColor4f(1.0f, 1.0f, 1.0f, solidColor[3]);
+        glBegin(GL_QUADS);
+        for (const auto& item : rects) {
+            EmitTexturedQuad(item.rect.x, item.rect.y, item.rect.w, item.rect.h, item.u0, item.v0,
+                              item.u1, item.v1);
+        }
+        glEnd();
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDisable(GL_TEXTURE_2D);
+    } else {
+        glDisable(GL_TEXTURE_2D);
+        glColor4f(solidColor[0], solidColor[1], solidColor[2], solidColor[3]);
+        glBegin(GL_QUADS); // one glBegin/glEnd for every rect (要件.txt §7)
+        for (const auto& item : rects) {
+            EmitQuad(item.rect.x, item.rect.y, item.rect.w, item.rect.h);
+        }
+        glEnd();
     }
-    glEnd();
+}
+} // namespace
+
+void DrawIconBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& icons) {
+    const float color[4] = {kIconColor[0], kIconColor[1], kIconColor[2], 1.0f};
+    DrawCapturedOrSolidBatch(captureTexture, icons, color);
 }
 
-void DrawWindowBodiesBatched(const std::vector<DrawRect>& clientAreas,
-                              const std::vector<DrawRect>& titleBars) {
-    glDisable(GL_TEXTURE_2D);
-
-    if (!clientAreas.empty()) {
-        glColor4f(kWindowBodyColor[0], kWindowBodyColor[1], kWindowBodyColor[2], kWindowBodyColor[3]);
-        glBegin(GL_QUADS);
-        for (const auto& r : clientAreas) {
-            EmitQuad(r.x, r.y, r.w, r.h);
-        }
-        glEnd();
-    }
-
-    if (!titleBars.empty()) {
-        glColor4f(kWindowTitleBarColor[0], kWindowTitleBarColor[1], kWindowTitleBarColor[2], 1.0f);
-        glBegin(GL_QUADS);
-        for (const auto& r : titleBars) {
-            EmitQuad(r.x, r.y, r.w, r.h);
-        }
-        glEnd();
-    }
+void DrawWindowBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& clientAreas,
+                              const std::vector<DrawCapturedRect>& titleBars) {
+    const float bodyColor[4] = {kWindowBodyColor[0], kWindowBodyColor[1], kWindowBodyColor[2],
+                                 kWindowBodyColor[3]};
+    const float titleColor[4] = {kWindowTitleBarColor[0], kWindowTitleBarColor[1], kWindowTitleBarColor[2],
+                                  1.0f};
+    DrawCapturedOrSolidBatch(captureTexture, clientAreas, bodyColor);
+    DrawCapturedOrSolidBatch(captureTexture, titleBars, titleColor);
 }
 
 void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfSizePx) {

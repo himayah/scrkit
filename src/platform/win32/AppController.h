@@ -22,6 +22,12 @@
 
 namespace platform {
 
+// UV rect into a "captured desktop" texture. Public (namespace-scope, not a
+// class member) so free helper functions can spell its name too.
+struct UvRect {
+    float u0 = 0.0f, v0 = 0.0f, u1 = 0.0f, v1 = 0.0f;
+};
+
 class AppController {
 public:
     AppController() = default;
@@ -34,8 +40,14 @@ public:
     // `wallpaperPath` is whichever image should be used as the background
     // (already resolved by the caller: config override, else system
     // wallpaper, possibly empty if neither is available).
+    // `desktopCapture`, when non-null, is a still image of the real screen
+    // taken just before the saver's own window covered it; when provided,
+    // icon/window boxes are textured with their corresponding clipping of
+    // it instead of a flat color (caller must have captured it at the same
+    // pixel dimensions as screenWidthPx x screenHeightPx, i.e. this is only
+    // meaningful for the real fullscreen size, not a scaled-down preview).
     bool Initialize(HDC hdc, int screenWidthPx, int screenHeightPx, const core::ConfigModel& config,
-                    const std::wstring& wallpaperPath);
+                    const std::wstring& wallpaperPath, const DecodedImage* desktopCapture = nullptr);
 
     void Update(float dtSeconds);
     void Draw() const;
@@ -48,9 +60,17 @@ private:
     int screenHeight_ = 0;
     int resolvedParticleCount_ = 3000;
     GLuint backgroundTexture_ = 0;
+    GLuint captureTexture_ = 0; // 0 when no desktop capture was supplied
     TextRenderer textRenderer_;
     core::DesktopLayout layout_; // generated once; reused every loop (要件4-6)
     std::vector<core::Particle> particles_; // generated once from the grid size
+
+    // UV rects into captureTexture_ for each icon / window's title bar and
+    // client area, computed once from their (fixed, original) layout
+    // position -- unused when captureTexture_ is 0.
+    std::vector<UvRect> iconUv_;
+    std::vector<UvRect> windowTitleUv_;
+    std::vector<UvRect> windowClientUv_;
 
     // --- live simulation state ---
     std::unique_ptr<core::Mt19937RandomSource> rng_;
@@ -84,6 +104,10 @@ private:
     static constexpr float kResetHoldSeconds = 1.5f;
     // Above this particle count, use the lighter spiral params from 要件.txt §7.
     static constexpr int kLightweightParticleThreshold = 3000;
+    // core::SpiralParams::centerAccelFactor for the background particle
+    // phase -- makes the image visibly warp into a tighter spiral as it
+    // nears the suction center (追加要望: 中心に近づくほど角速度を上げる).
+    static constexpr float kParticleCenterAccelFactor = 40.0f;
 
     void EnsureIconSpiralsInit(core::Vec2 centerPos);
     void EnsureWindowSpiralsInit(core::Vec2 centerPos);

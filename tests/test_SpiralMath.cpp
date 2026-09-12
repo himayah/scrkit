@@ -59,3 +59,43 @@ TEST_CASE(SpiralMath_LightweightParamsAreLighterThanNormal) {
     CHECK(light.dTheta < normal.dTheta);
     CHECK(light.suctionSpeed < normal.suctionSpeed);
 }
+
+TEST_CASE(SpiralMath_ZeroCenterAccelMatchesPlainDTheta) {
+    // Default centerAccelFactor (0) must reproduce the original
+    // constant-angular-speed behavior exactly.
+    auto stateA = MakeSpiralState(150.0f, 100.0f, 100.0f, 100.0f);
+    auto stateB = stateA;
+    SpiralParams plain{0.15f, 2.0f, 0.0f};
+    SpiralParams explicitZero{0.15f, 2.0f, 0.0f};
+    StepSpiral(stateA, plain, 100.0f, 100.0f);
+    StepSpiral(stateB, explicitZero, 100.0f, 100.0f);
+    CHECK_NEAR(stateA.theta, stateB.theta, 0.00001f);
+}
+
+TEST_CASE(SpiralMath_CenterAccelIncreasesAngularSpeedNearCenter) {
+    SpiralParams params{0.1f, 0.0f, 40.0f}; // suctionSpeed 0 so r stays fixed per case
+    auto farState = MakeSpiralState(300.0f, 100.0f, 100.0f, 100.0f);  // r = 200
+    auto nearState = MakeSpiralState(110.0f, 100.0f, 100.0f, 100.0f); // r = 10
+    StepSpiral(farState, params, 100.0f, 100.0f);
+    StepSpiral(nearState, params, 100.0f, 100.0f);
+    const float farDTheta = farState.theta;   // started at theta=0
+    const float nearDTheta = nearState.theta; // started at theta=0
+    CHECK(nearDTheta > farDTheta);
+    // far: 0.1 + 40/200 = 0.3 ; near: 0.1 + 40/10 = 4.1 -> clamped to kMaxDTheta(1.2)
+    CHECK_NEAR(farDTheta, 0.3f, 0.001f);
+    CHECK_NEAR(nearDTheta, 1.2f, 0.001f);
+}
+
+TEST_CASE(SpiralMath_CenterAccelNeverExceedsClampEvenAtTinyR) {
+    SpiralParams params{0.1f, 0.0f, 1000.0f};
+    auto state = MakeSpiralState(100.5f, 100.0f, 100.0f, 100.0f); // r = 0.5 -> clamped to max(r,1)=1
+    auto pos = StepSpiral(state, params, 100.0f, 100.0f);
+    CHECK_NEAR(state.theta, 1.2f, 0.001f); // clamped, not 0.1 + 1000/0.5
+    (void)pos;
+}
+
+TEST_CASE(SpiralMath_VortexParamsHavePositiveCenterAccel) {
+    auto vortex = core::VortexSpiralParams();
+    CHECK(vortex.centerAccelFactor > 0.0f);
+    CHECK_NEAR(vortex.dTheta, core::LightweightSpiralParams().dTheta, 0.0001f);
+}

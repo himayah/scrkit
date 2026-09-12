@@ -27,6 +27,18 @@ struct DrawLabeledRect {
     std::string label;
 };
 
+// A rectangle to draw, plus the UV coordinates it should sample from a
+// "captured desktop" texture (i.e. what was really at this screen location
+// when the saver started) instead of a flat placeholder color. u0v0/u1v1
+// are ignored when the draw call is given a texture of 0.
+struct DrawCapturedRect {
+    DrawRect rect;
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 0.0f;
+    float v1 = 0.0f;
+};
+
 // A single particle: current center position + the UV cell it samples from
 // the background texture. Particle size is fixed (passed once, not per
 // particle) per 要件.txt §7.
@@ -51,14 +63,17 @@ void ClearBlack();
 // fade-in overlay) blended with the given alpha.
 void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHeightPx, float alpha);
 
-// Draws every icon body in a single glBegin(GL_QUADS)/glEnd batch, using one
-// fixed color (要件.txt §7: 固定色).
-void DrawIconBodiesBatched(const std::vector<DrawRect>& icons);
+// Draws every icon body in a single glBegin(GL_QUADS)/glEnd batch. When
+// `captureTexture` is non-zero, each icon is textured with its captured
+// desktop clipping (user feedback: plain color boxes looked too bare);
+// when it is 0 (e.g. no capture available, or preview mode), falls back to
+// one fixed solid color (要件.txt §7: 固定色) as before.
+void DrawIconBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& icons);
 
 // Draws every window's client area, then every window's title bar, each as
-// its own single batch (two fixed colors).
-void DrawWindowBodiesBatched(const std::vector<DrawRect>& clientAreas,
-                              const std::vector<DrawRect>& titleBars);
+// its own single batch. Same captureTexture fallback rule as above.
+void DrawWindowBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& clientAreas,
+                              const std::vector<DrawCapturedRect>& titleBars);
 
 // Draws every particle in one glBegin(GL_QUADS)/glEnd batch, sampling from
 // `texture`. `halfSizePx` is the fixed half-width/height of every particle

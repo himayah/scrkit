@@ -9,6 +9,7 @@
 #include "AppPaths.h"
 #include "OpenGLContext.h"
 #include "Renderer.h"
+#include "ScreenCapture.h"
 #include "StringConvert.h"
 #include "WallpaperProvider.h"
 #include "WinFileIO.h"
@@ -130,15 +131,18 @@ std::wstring ResolveWallpaperPath(const core::ConfigModel& config) {
 
 // Shared render loop for both fullscreen and preview windows. Blocks until
 // the window is destroyed (by user input in fullscreen mode, or by the
-// preview parent going away).
-void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height) {
+// preview parent going away). `desktopCapture`, when non-null, must cover
+// exactly width x height pixels (only meaningful for the real fullscreen
+// size -- callers never pass one for the scaled-down preview).
+void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
+                    const DecodedImage* desktopCapture = nullptr) {
     core::ConfigModel config = LoadConfigOrDefault();
     std::wstring wallpaper = ResolveWallpaperPath(config);
 
     SetupOrthoProjection2D(width, height);
 
     AppController app;
-    if (!app.Initialize(gl.GetHDC(), width, height, config, wallpaper)) {
+    if (!app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture)) {
         core::Logger::Error("SaverWindow: AppController::Initialize failed");
         return;
     }
@@ -197,6 +201,18 @@ void RunFullScreenSaver(HINSTANCE instance) {
     const int width = GetSystemMetrics(SM_CXSCREEN);
     const int height = GetSystemMetrics(SM_CYSCREEN);
 
+    // Capture the real desktop (wallpaper + whatever icons/windows are
+    // really showing right now) *before* our own window covers the screen,
+    // so icon/window boxes can be textured with a clipping of it instead of
+    // a flat placeholder color (user feedback). A capture failure is
+    // non-fatal -- AppController falls back to solid colors when passed
+    // nullptr, same as before this feature existed.
+    DecodedImage desktopCapture;
+    const bool haveCapture = CaptureScreenToImage(width, height, desktopCapture);
+    if (!haveCapture) {
+        core::Logger::Warn("RunFullScreenSaver: desktop capture failed; icon/window boxes will use solid colors");
+    }
+
     WindowContext ctx;
     ctx.mode = WindowMode::Fullscreen;
 
@@ -215,7 +231,7 @@ void RunFullScreenSaver(HINSTANCE instance) {
 
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        RunMessageLoop(hwnd, gl, width, height);
+        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr);
         gl.Destroy();
     } else {
         core::Logger::Error("RunFullScreenSaver: OpenGL context creation failed");

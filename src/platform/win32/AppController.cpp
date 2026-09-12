@@ -29,7 +29,8 @@ bool AllDead(const std::vector<core::SpiralState>& states) {
 AppController::~AppController() { Shutdown(); }
 
 bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
-                                const core::ConfigModel& config, const std::wstring& wallpaperPath) {
+                                const core::ConfigModel& config, const std::wstring& wallpaperPath,
+                                const DecodedImage* desktopCapture) {
     screenWidth_ = screenWidthPx;
     screenHeight_ = screenHeightPx;
 
@@ -58,6 +59,47 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     layoutConfig.screenHeight = static_cast<float>(screenHeight_);
     layoutConfig.seed = std::random_device{}();
     layout_ = core::GenerateDesktopLayout(layoutConfig);
+
+    // 3b. Desktop capture (optional): texture icon/window boxes with a
+    // clipping of what was really on screen, instead of a flat placeholder
+    // color (user feedback). Only meaningful when `desktopCapture` covers
+    // the same pixel dimensions as screenWidth_/screenHeight_, which is the
+    // caller's responsibility (SaverWindow only supplies it in fullscreen
+    // mode, never for the scaled-down preview).
+    if (captureTexture_ != 0) {
+        glDeleteTextures(1, &captureTexture_);
+        captureTexture_ = 0;
+    }
+    iconUv_.clear();
+    windowTitleUv_.clear();
+    windowClientUv_.clear();
+    if (desktopCapture) {
+        captureTexture_ = CreateTextureFromImage(*desktopCapture);
+        if (captureTexture_ != 0) {
+            const float invW = 1.0f / static_cast<float>(screenWidth_);
+            const float invH = 1.0f / static_cast<float>(screenHeight_);
+
+            iconUv_.resize(layout_.icons.size());
+            for (size_t i = 0; i < layout_.icons.size(); ++i) {
+                const auto& icon = layout_.icons[i];
+                iconUv_[i] = {icon.x * invW, icon.y * invH, (icon.x + icon.width) * invW,
+                              (icon.y + icon.height) * invH};
+            }
+
+            windowTitleUv_.resize(layout_.windows.size());
+            windowClientUv_.resize(layout_.windows.size());
+            for (size_t i = 0; i < layout_.windows.size(); ++i) {
+                const auto& win = layout_.windows[i];
+                windowTitleUv_[i] = {win.x * invW, win.y * invH, (win.x + win.width) * invW,
+                                     (win.y + win.titleBarHeight) * invH};
+                windowClientUv_[i] = {win.x * invW, (win.y + win.titleBarHeight) * invH,
+                                      (win.x + win.width) * invW,
+                                      (win.y + win.titleBarHeight + win.height) * invH};
+            }
+        } else {
+            core::Logger::Warn("AppController: failed to create desktop capture texture; falling back to solid colors");
+        }
+    }
 
     // 4. Particle count: resolve Auto/Custom/preset into a concrete count,
     //    then lay out the NxN grid (要件.txt §5, §6).
@@ -100,6 +142,10 @@ void AppController::Shutdown() {
     if (backgroundTexture_ != 0) {
         glDeleteTextures(1, &backgroundTexture_);
         backgroundTexture_ = 0;
+    }
+    if (captureTexture_ != 0) {
+        glDeleteTextures(1, &captureTexture_);
+        captureTexture_ = 0;
     }
     textRenderer_.Shutdown();
 }
@@ -159,9 +205,12 @@ void AppController::StepWindowSpirals(core::Vec2 centerPos) {
 
 void AppController::StepParticleSpirals(core::Vec2 centerPos) {
     // 要件.txt §7: 粒子が多いときは軽量なパラメータでらせん計算する。
-    const auto params = resolvedParticleCount_ > kLightweightParticleThreshold
-                             ? core::LightweightSpiralParams()
-                             : core::NormalSpiralParams();
+    auto params = resolvedParticleCount_ > kLightweightParticleThreshold
+                       ? core::LightweightSpiralParams()
+                       : core::NormalSpiralParams();
+    // 追加要望: 背景画像が吸い込まれるとき、中心に近づくほど角速度を上げて
+    // らせん状に歪める。
+    params.centerAccelFactor = kParticleCenterAccelFactor;
     for (size_t i = 0; i < particleSpirals_.size(); ++i) {
         if (particleSpirals_[i].alive) {
             particleCurrentPos_[i] = core::StepSpiral(particleSpirals_[i], params, centerPos.x, centerPos.y);
@@ -246,23 +295,34 @@ void AppController::Update(float dtSeconds) {
     }
 }
 
+namespace {
+DrawCapturedRect ToCapturedRect(const DrawRect& rect, const UvRect& uv) {
+    return {rect, uv.u0, uv.v0, uv.u1, uv.v1};
+}
+} // namespace
+
 void AppController::DrawIconsPhase() const {
     DrawFullscreenTexturedQuad(backgroundTexture_, screenWidth_, screenHeight_, 1.0f);
 
     // Windows are untouched during the icon phase; show them at rest.
-    std::vector<DrawRect> clientAreas, titleBars;
+    std::vector<DrawCapturedRect> clientAreas, titleBars;
     std::vector<DrawLabeledRect> windowLabels;
     clientAreas.reserve(layout_.windows.size());
     titleBars.reserve(layout_.windows.size());
-    for (const auto& win : layout_.windows) {
-        titleBars.push_back({win.x, win.y, win.width, win.titleBarHeight});
-        clientAreas.push_back({win.x, win.y + win.titleBarHeight, win.width, win.height});
+    for (size_t i = 0; i < layout_.windows.size(); ++i) {
+        const auto& win = layout_.windows[i];
+        DrawRect titleRect{win.x, win.y, win.width, win.titleBarHeight};
+        DrawRect clientRect{win.x, win.y + win.titleBarHeight, win.width, win.height};
+        titleBars.push_back(i < windowTitleUv_.size() ? ToCapturedRect(titleRect, windowTitleUv_[i])
+                                                        : DrawCapturedRect{titleRect});
+        clientAreas.push_back(i < windowClientUv_.size() ? ToCapturedRect(clientRect, windowClientUv_[i])
+                                                           : DrawCapturedRect{clientRect});
         windowLabels.push_back({{win.x + 4.0f, win.y + 4.0f, win.width, win.titleBarHeight}, win.title});
     }
-    DrawWindowBodiesBatched(clientAreas, titleBars);
+    DrawWindowBodiesBatched(captureTexture_, clientAreas, titleBars);
     DrawLabels(textRenderer_, windowLabels, 0.0f, 12.0f);
 
-    std::vector<DrawRect> iconRects;
+    std::vector<DrawCapturedRect> iconRects;
     std::vector<DrawLabeledRect> iconLabels;
     iconRects.reserve(layout_.icons.size());
     for (size_t i = 0; i < layout_.icons.size(); ++i) {
@@ -270,17 +330,17 @@ void AppController::DrawIconsPhase() const {
         const auto& icon = layout_.icons[i];
         const auto& pos = iconCurrentPos_[i];
         DrawRect rect{pos.x - icon.width * 0.5f, pos.y - icon.height * 0.5f, icon.width, icon.height};
-        iconRects.push_back(rect);
+        iconRects.push_back(i < iconUv_.size() ? ToCapturedRect(rect, iconUv_[i]) : DrawCapturedRect{rect});
         iconLabels.push_back({rect, icon.label});
     }
-    DrawIconBodiesBatched(iconRects);
+    DrawIconBodiesBatched(captureTexture_, iconRects);
     DrawLabels(textRenderer_, iconLabels, 0.0f, iconRects.empty() ? 0.0f : 46.0f);
 }
 
 void AppController::DrawWindowsPhase() const {
     DrawFullscreenTexturedQuad(backgroundTexture_, screenWidth_, screenHeight_, 1.0f);
 
-    std::vector<DrawRect> clientAreas, titleBars;
+    std::vector<DrawCapturedRect> clientAreas, titleBars;
     std::vector<DrawLabeledRect> windowLabels;
     for (size_t i = 0; i < layout_.windows.size(); ++i) {
         if (i >= windowSpirals_.size() || !windowSpirals_[i].alive) continue;
@@ -289,12 +349,15 @@ void AppController::DrawWindowsPhase() const {
         const float totalHeight = win.titleBarHeight + win.height;
         const float left = pos.x - win.width * 0.5f;
         const float top = pos.y - totalHeight * 0.5f;
-        DrawRect titleBar{left, top, win.width, win.titleBarHeight};
-        titleBars.push_back(titleBar);
-        clientAreas.push_back({left, top + win.titleBarHeight, win.width, win.height});
+        DrawRect titleRect{left, top, win.width, win.titleBarHeight};
+        DrawRect clientRect{left, top + win.titleBarHeight, win.width, win.height};
+        titleBars.push_back(i < windowTitleUv_.size() ? ToCapturedRect(titleRect, windowTitleUv_[i])
+                                                        : DrawCapturedRect{titleRect});
+        clientAreas.push_back(i < windowClientUv_.size() ? ToCapturedRect(clientRect, windowClientUv_[i])
+                                                           : DrawCapturedRect{clientRect});
         windowLabels.push_back({{left + 4.0f, top + 4.0f, win.width, win.titleBarHeight}, win.title});
     }
-    DrawWindowBodiesBatched(clientAreas, titleBars);
+    DrawWindowBodiesBatched(captureTexture_, clientAreas, titleBars);
     DrawLabels(textRenderer_, windowLabels, 0.0f, 12.0f);
 }
 
@@ -314,21 +377,27 @@ void AppController::DrawBackgroundPhase() const {
 void AppController::DrawResetPhase() const {
     DrawFullscreenTexturedQuad(backgroundTexture_, screenWidth_, screenHeight_, 1.0f);
 
-    std::vector<DrawRect> clientAreas, titleBars, iconRects;
+    std::vector<DrawCapturedRect> clientAreas, titleBars, iconRects;
     std::vector<DrawLabeledRect> windowLabels, iconLabels;
-    for (const auto& win : layout_.windows) {
-        titleBars.push_back({win.x, win.y, win.width, win.titleBarHeight});
-        clientAreas.push_back({win.x, win.y + win.titleBarHeight, win.width, win.height});
+    for (size_t i = 0; i < layout_.windows.size(); ++i) {
+        const auto& win = layout_.windows[i];
+        DrawRect titleRect{win.x, win.y, win.width, win.titleBarHeight};
+        DrawRect clientRect{win.x, win.y + win.titleBarHeight, win.width, win.height};
+        titleBars.push_back(i < windowTitleUv_.size() ? ToCapturedRect(titleRect, windowTitleUv_[i])
+                                                        : DrawCapturedRect{titleRect});
+        clientAreas.push_back(i < windowClientUv_.size() ? ToCapturedRect(clientRect, windowClientUv_[i])
+                                                           : DrawCapturedRect{clientRect});
         windowLabels.push_back({{win.x + 4.0f, win.y + 4.0f, win.width, win.titleBarHeight}, win.title});
     }
-    for (const auto& icon : layout_.icons) {
+    for (size_t i = 0; i < layout_.icons.size(); ++i) {
+        const auto& icon = layout_.icons[i];
         DrawRect rect{icon.x, icon.y, icon.width, icon.height};
-        iconRects.push_back(rect);
+        iconRects.push_back(i < iconUv_.size() ? ToCapturedRect(rect, iconUv_[i]) : DrawCapturedRect{rect});
         iconLabels.push_back({rect, icon.label});
     }
-    DrawWindowBodiesBatched(clientAreas, titleBars);
+    DrawWindowBodiesBatched(captureTexture_, clientAreas, titleBars);
     DrawLabels(textRenderer_, windowLabels, 0.0f, 12.0f);
-    DrawIconBodiesBatched(iconRects);
+    DrawIconBodiesBatched(captureTexture_, iconRects);
     DrawLabels(textRenderer_, iconLabels, 0.0f, 46.0f);
 }
 

@@ -13,6 +13,7 @@ set(WIN32_SOURCES
     OpenGLContext.cpp
     Renderer.cpp
     SaverWindow.cpp
+    ScreenCapture.cpp
     TextRenderer.cpp
     WallpaperProvider.cpp
     WinFileIO.cpp

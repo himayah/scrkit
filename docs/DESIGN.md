@@ -48,7 +48,7 @@ flowchart TB
 
 | モジュール | 責務 |
 |---|---|
-| `SpiralMath` | θ+=dTheta, r-=speed のらせん軌道計算 (要件§4, §7)。`SpiralState`/`SpiralParams`/`StepSpiral`。 |
+| `SpiralMath` | θ+=dTheta, r-=speed のらせん軌道計算 (要件§4, §7)。`SpiralState`/`SpiralParams`/`StepSpiral`。`SpiralParams::centerAccelFactor`(>0)で中心に近づくほど角速度が増し、らせん状に歪む(追加要望対応、既定0で従来どおり)。 |
 | `SuctionCenterWalker` | 吸い込み中心のランダムウォーク (1〜3px/frame 相当、画面端で反射)。`IRandomSource` を注入して決定的にテスト可能。 |
 | `DesktopElements` | アイコン(20-40)・ウィンドウ(5-10)を矩形+ラベルとして模擬生成。**シード付きで決定的**であり、起動時に一度だけ生成して毎ループ再利用する (要件§4 step6)。実デスクトップは一切読み書きしない。 |
 | `ParticleGrid` | 背景画像を NxN 粒子に分割 (要件§5)。`ComputeGridDimensionForParticleCount` が希望粒子数から N を逆算。 |
@@ -70,6 +70,7 @@ flowchart TB
 | `Renderer` | 固定機能OpenGLの描画バッチ関数群 (アイコン・ウィンドウ・粒子をそれぞれ `glBegin`/`glEnd` 1回で描画、要件§7)。 |
 | `TextRenderer` | `wglUseFontBitmaps` によるビットマップフォント表示リストで、アイコン/ウィンドウのラベルを固定機能のまま描画。 |
 | `ImageLoader` | Windows Imaging Component (WIC) でBMP/JPEG/PNG/GIFをデコードしGLテクスチャ化。外部画像ライブラリ不要。 |
+| `ScreenCapture` | `BitBlt`で画面を1回読み取り`DecodedImage`化(要件.txt後の追加要望: アイコン/ウィンドウ矩形を単色でなく実際の画面のクリッピングで描画)。読み取り専用で、実アイコン/ウィンドウの位置・個数は問い合わせない。 |
 | `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得 (読み取り専用)。 |
 | `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。 |
 | `AppPaths` / `WinFileIO` | `%APPDATA%/SpiralSuctionSaver/{config.ini,saver.log}` の解決とワイド文字パスでのファイルI/O (非ASCIIユーザー名対策)。 |
@@ -92,10 +93,14 @@ stateDiagram-v2
 各フェーズの詳細:
 
 - **STATE_ICONS**: 背景画像を全画面に描画。ウィンドウは元の位置のまま静止表示。アイコンは
-  `SpiralMath` で中心へ吸い込まれ、r<=0で消滅する。
-- **STATE_WINDOWS**: アイコンは全消滅済みのため非表示。ウィンドウが吸い込まれる。
+  `SpiralMath` で中心へ吸い込まれ、r<=0で消滅する。フルスクリーン実行時は、`ScreenCapture`で
+  起動直後に取得した画面のクリッピングでアイコン矩形をテクスチャリングする
+  (`AppController::captureTexture_`が0のとき、すなわちプレビュー時や取得失敗時は単色にフォールバック)。
+- **STATE_WINDOWS**: アイコンは全消滅済みのため非表示。ウィンドウが吸い込まれる。ウィンドウの
+  クライアント領域・タイトルバーも同様に画面クリッピングでテクスチャリングされる。
 - **STATE_BACKGROUND**: 画面を黒でクリアしてから粒子をバッチ描画するため、吸い込まれた
-  箇所から自然に黒が露出する。
+  箇所から自然に黒が露出する。粒子の`SpiralParams`には`centerAccelFactor`(既定40)が設定され、
+  中心に近づくほど角速度が増してらせん状に歪む演出になる。
 - **STATE_BLACK**: 黒一色を一定時間 (1秒) 保持。
 - **STATE_FADE**: 黒背景の上に背景画像を alpha=0→1 でブレンド。
 - **STATE_RESET**: 背景・ウィンドウ・アイコンを全て元の位置で静止表示し、一定時間 (1.5秒)
@@ -173,7 +178,8 @@ cmake --build build-tests
 ctest --test-dir build-tests --output-on-failure
 ```
 
-対象: `SpiralMath` の収束性、`SuctionCenterWalker` の境界反射、`StateMachine` の全遷移経路、
+対象: `SpiralMath` の収束性・`centerAccelFactor`による角速度増加とクランプ挙動、
+`SuctionCenterWalker` の境界反射、`StateMachine` の全遷移経路、
 `ParticleGrid` の件数・範囲、`ConfigModel` のini往復変換と不正値フォールバック、
 `GpuTierClassifier` の既知ベンダ文字列分類、`DesktopElements` の個数・範囲・再現性、
 `RandomSource` の値域。
@@ -206,10 +212,21 @@ Win32/OpenGL実装はLinux開発機でコンパイルできないため、GitHub
 - [ ] Windowsの「スクリーンセーバーの設定」プレビュー枠で `/p` によるプレビューが表示され、
       設定ダイアログを閉じるとプレビューも終了することを確認する。
 - [ ] 壁紙を変更した状態で上書き未設定のときに新しい壁紙が反映されることを確認する。
+- [ ] `/s` 実行時、アイコン・ウィンドウの矩形が単色ではなく起動直前の画面のクリッピング
+      画像で描画されることを確認する。
+- [ ] 背景粒子が吸い込まれる際、中心に近づくほど回転が速くなりらせん状に歪むことを確認する。
 
 ## 9. 既知の制約・スコープ外事項
 
 - マルチモニタは対象外とし、プライマリディスプレイの解像度のみを使用する
   (要件.txt に明記がないため、設計レビューでスコープを明示的に限定)。
-- 実デスクトップのアイコン配置・実際に開いているウィンドウは一切読み取らず、
+- 実デスクトップのアイコン配置・実際に開いているウィンドウの位置や個数は一切問い合わせず、
   すべて模擬データ (`DesktopElements`) を用いる (要件§10 禁止事項準拠)。
+- 【追加要望への対応】当初の要件§3は矩形+ラベルのみの抽象表現だったが、実運用フィードバック
+  (「ただの箱に見える」)を受け、フルスクリーン実行時のみ起動直後の画面を1回`BitBlt`で読み取り
+  (`ScreenCapture`)、矩形の見た目をそのクリッピングでテクスチャリングするよう変更した。
+  これは実アイコン/ウィンドウの**位置や個数を問い合わせる操作ではなく**、画面ピクセルを
+  読み取るだけの単純な操作であり、要件§10「実際のデスクトップを操作してはならない」には
+  抵触しない（操作＝移動・削除等の変更を指し、読み取り専用のスクリーンショットは含まない
+  と解釈）。プレビュー表示 (`/p`) は簡易シミュレーション用の縮小キャンバスで動作しており
+  実画面座標と対応しないため、この機能は意図的にフルスクリーン (`/s`) のみに限定している。
