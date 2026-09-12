@@ -46,8 +46,13 @@ public:
     // it instead of a flat color (caller must have captured it at the same
     // pixel dimensions as screenWidthPx x screenHeightPx, i.e. this is only
     // meaningful for the real fullscreen size, not a scaled-down preview).
+    // `realIcons`/`realWindows`, when non-null and non-empty, replace the
+    // randomly-generated layout with the real desktop icon/window positions
+    // (see RealDesktopQuery) so suction starts from where things really are.
     bool Initialize(HDC hdc, int screenWidthPx, int screenHeightPx, const core::ConfigModel& config,
-                    const std::wstring& wallpaperPath, const DecodedImage* desktopCapture = nullptr);
+                    const std::wstring& wallpaperPath, const DecodedImage* desktopCapture = nullptr,
+                    const std::vector<core::IconElement>* realIcons = nullptr,
+                    const std::vector<core::WindowElement>* realWindows = nullptr);
 
     void Update(float dtSeconds);
     void Draw() const;

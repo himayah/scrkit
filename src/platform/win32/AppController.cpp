@@ -30,7 +30,9 @@ AppController::~AppController() { Shutdown(); }
 
 bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
                                 const core::ConfigModel& config, const std::wstring& wallpaperPath,
-                                const DecodedImage* desktopCapture) {
+                                const DecodedImage* desktopCapture,
+                                const std::vector<core::IconElement>* realIcons,
+                                const std::vector<core::WindowElement>* realWindows) {
     screenWidth_ = screenWidthPx;
     screenHeight_ = screenHeightPx;
 
@@ -58,7 +60,22 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     layoutConfig.screenWidth = static_cast<float>(screenWidth_);
     layoutConfig.screenHeight = static_cast<float>(screenHeight_);
     layoutConfig.seed = std::random_device{}();
-    layout_ = core::GenerateDesktopLayout(layoutConfig);
+    layout_ = core::GenerateDesktopLayout(layoutConfig); // baseline fallback, always computed
+
+    // 3a. Prefer real icon/window positions when the caller supplied them
+    // (fullscreen mode only -- see RealDesktopQuery). User feedback: random
+    // placement didn't look like real icons/windows being sucked in. Falls
+    // back to the random layout above if unavailable for any reason.
+    if (realIcons && !realIcons->empty()) {
+        layout_.icons = *realIcons;
+        core::Logger::Info("AppController: using " + std::to_string(layout_.icons.size()) +
+                            " real desktop icon position(s)");
+    }
+    if (realWindows && !realWindows->empty()) {
+        layout_.windows = *realWindows;
+        core::Logger::Info("AppController: using " + std::to_string(layout_.windows.size()) +
+                            " real window position(s)");
+    }
 
     // 3b. Desktop capture (optional): texture icon/window boxes with a
     // clipping of what was really on screen, instead of a flat placeholder

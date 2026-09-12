@@ -11,6 +11,7 @@ set(WIN32_SOURCES
     FileLogSink.cpp
     ImageLoader.cpp
     OpenGLContext.cpp
+    RealDesktopQuery.cpp
     Renderer.cpp
     SaverWindow.cpp
     ScreenCapture.cpp
@@ -77,6 +78,7 @@ target_link_libraries(SpiralSuctionSaver PRIVATE
     comdlg32
     ole32
     windowscodecs
+    dwmapi
 )
 
 # A screensaver is an ordinary Win32 GUI executable, just renamed with a

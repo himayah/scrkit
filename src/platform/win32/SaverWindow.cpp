@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 #include "../../core/ConfigModel.h"
 #include "../../core/Logger.h"
 #include "AppController.h"
 #include "AppPaths.h"
 #include "OpenGLContext.h"
+#include "RealDesktopQuery.h"
 #include "Renderer.h"
 #include "ScreenCapture.h"
 #include "StringConvert.h"
@@ -131,18 +133,22 @@ std::wstring ResolveWallpaperPath(const core::ConfigModel& config) {
 
 // Shared render loop for both fullscreen and preview windows. Blocks until
 // the window is destroyed (by user input in fullscreen mode, or by the
-// preview parent going away). `desktopCapture`, when non-null, must cover
-// exactly width x height pixels (only meaningful for the real fullscreen
-// size -- callers never pass one for the scaled-down preview).
+// preview parent going away). `desktopCapture`/`realIcons`/`realWindows`,
+// when non-null, must correspond to exactly width x height pixels (only
+// meaningful for the real fullscreen size -- callers never pass these for
+// the scaled-down preview).
 void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
-                    const DecodedImage* desktopCapture = nullptr) {
+                    const DecodedImage* desktopCapture = nullptr,
+                    const std::vector<core::IconElement>* realIcons = nullptr,
+                    const std::vector<core::WindowElement>* realWindows = nullptr) {
     core::ConfigModel config = LoadConfigOrDefault();
     std::wstring wallpaper = ResolveWallpaperPath(config);
 
     SetupOrthoProjection2D(width, height);
 
     AppController app;
-    if (!app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture)) {
+    if (!app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture, realIcons,
+                         realWindows)) {
         core::Logger::Error("SaverWindow: AppController::Initialize failed");
         return;
     }
@@ -213,6 +219,15 @@ void RunFullScreenSaver(HINSTANCE instance) {
         core::Logger::Warn("RunFullScreenSaver: desktop capture failed; icon/window boxes will use solid colors");
     }
 
+    // Same idea, but for *position*: read where icons/windows really are
+    // right now, so suction starts from their real spot instead of a random
+    // one (user feedback). Read-only; falls back to the random layout if
+    // this fails for any reason (see RealDesktopQuery.h).
+    std::vector<core::IconElement> realIcons;
+    const bool haveRealIcons = QueryRealDesktopIcons(width, height, realIcons);
+    std::vector<core::WindowElement> realWindows;
+    const bool haveRealWindows = QueryRealOpenWindows(width, height, realWindows);
+
     WindowContext ctx;
     ctx.mode = WindowMode::Fullscreen;
 
@@ -231,7 +246,8 @@ void RunFullScreenSaver(HINSTANCE instance) {
 
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr);
+        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr,
+                       haveRealIcons ? &realIcons : nullptr, haveRealWindows ? &realWindows : nullptr);
         gl.Destroy();
     } else {
         core::Logger::Error("RunFullScreenSaver: OpenGL context creation failed");

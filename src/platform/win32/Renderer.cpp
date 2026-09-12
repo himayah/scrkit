@@ -10,6 +10,21 @@ constexpr float kWindowBodyColor[4] = {0.90f, 0.90f, 0.90f, 0.92f};
 constexpr float kWindowTitleBarColor[3] = {0.12f, 0.30f, 0.55f};
 constexpr float kLabelColor[3] = {0.05f, 0.05f, 0.05f};
 
+// TextRenderer's display lists only cover the ANSI byte range 32-255 built
+// from one fixed font/charset. A real window/icon label (unlike the
+// synthetic "Icon N"/"Window N" placeholders) can be arbitrary UTF-8,
+// e.g. Japanese app names -- feeding those multi-byte sequences into
+// glCallLists byte-by-byte would render as mojibake. Real content is
+// already visible as actual pixels in the captured-desktop texture (when
+// available) anyway, so it's safe to just skip the text overlay for any
+// label that isn't plain printable ASCII, rather than risk garbled text.
+bool IsAsciiPrintable(const std::string& s) {
+    for (unsigned char c : s) {
+        if (c < 0x20 || c > 0x7E) return false;
+    }
+    return true;
+}
+
 inline void EmitQuad(float x, float y, float w, float h) {
     glVertex2f(x, y);
     glVertex2f(x + w, y);
@@ -137,6 +152,7 @@ void DrawLabels(const TextRenderer& textRenderer, const std::vector<DrawLabeledR
     glDisable(GL_TEXTURE_2D);
     glColor4f(kLabelColor[0], kLabelColor[1], kLabelColor[2], 1.0f);
     for (const auto& item : items) {
+        if (!IsAsciiPrintable(item.label)) continue; // see IsAsciiPrintable comment above
         textRenderer.DrawText(item.rect.x + offsetX, item.rect.y + offsetY, item.label);
     }
 }
