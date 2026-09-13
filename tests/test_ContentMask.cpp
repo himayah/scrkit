@@ -95,6 +95,34 @@ TEST_CASE(ContentMask_MinorPerPixelNoiseStaysBelowPixelThreshold) {
     for (bool cell : mask) CHECK(!cell);
 }
 
+TEST_CASE(ContentMask_UniformBrightnessOffsetDoesNotFlagPlainBackground) {
+    // Simulates Windows tone-mapping the whole desktop brighter than the
+    // wallpaper file's raw pixels when HDR/"Advanced color" is enabled
+    // (real-machine feedback: capture sampled ~1.7x brighter than the
+    // composited wallpaper reference, which without gain correction flagged
+    // ~97% of the screen as "content"). Every capture pixel here is exactly
+    // wallpaper*1.7 (clamped), so the two should be recognized as the "same"
+    // background once gain-corrected -- only the genuinely different patch
+    // (unrelated to the scaling, e.g. a real icon) should be flagged.
+    const int width = 64, height = 64, gridN = 4; // 16x16 cells
+    auto wallpaper = SolidBuffer(width, height, 60, 80, 100);
+    auto capture = SolidBuffer(width, height, 102, 136, 170); // 60/80/100 * 1.7
+    // Cell (row=1, col=2) covers x in [32,48), y in [16,32) -- a genuinely
+    // different color, not just the uniform brightness offset above.
+    FillRect(capture, width, 32, 16, 48, 32, 0, 200, 0);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+
+    const size_t flaggedIndex = static_cast<size_t>(1) * gridN + 2;
+    for (size_t i = 0; i < mask.size(); ++i) {
+        CHECK_EQ(mask[i], i == flaggedIndex);
+    }
+}
+
 TEST_CASE(ResampleRgba_NearestNeighborUpscalePicksSourcePixels) {
     // 2x1 source: left pixel red, right pixel blue.
     std::vector<uint8_t> src = {255, 0, 0, 255, 0, 0, 255, 255};

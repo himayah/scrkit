@@ -35,6 +35,17 @@ struct ContentMaskConfig {
 // enough from `wallpaperRgba` to be treated as real desktop content to suck
 // away. Both buffers must already be screenWidth x screenHeight RGBA8 (top-
 // down), matching `config`.
+//
+// Before diffing, `wallpaperRgba` is rescaled by a single global brightness
+// gain (captureRgba's overall mean / wallpaperRgba's overall mean, clamped
+// to a sane range) so a uniform brightness offset between the two doesn't
+// itself register as "content" -- real-machine feedback showed Windows
+// tone-maps the whole desktop noticeably brighter than a wallpaper file's
+// raw pixels when the display has HDR/"Advanced color" enabled (~1.7x
+// brighter on a real 4K HDR screen), which otherwise pushed nearly every
+// cell's diff over pixelDiffThreshold and flagged ~97% of the screen as
+// content. A plain SDR display has no such offset, so the computed gain
+// there is ~1.0 and this is a no-op.
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config);
 
