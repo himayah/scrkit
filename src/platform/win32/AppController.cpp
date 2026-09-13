@@ -97,9 +97,18 @@ bool SaveDebugBmp(const std::wstring& path, const DecodedImage& image) {
 // per-pixel differences remain even where the overall averages now match.
 // That could be a non-uniform (non-linear) tone curve that a single flat
 // gain can't correct, or it could mean the two images don't actually
-// correspond to the same picture/crop at all. Saving both side by side
-// (downscaled so the files stay small enough to open/attach) lets that be
-// seen directly instead of guessing from summary numbers alone.
+// correspond to the same picture/crop at all. Saving both side by side lets
+// that be seen directly instead of guessing from summary numbers alone.
+//
+// Saved at full screen resolution, NOT downscaled: an earlier version of
+// this function capped the output at 1280px on the long edge for easier
+// viewing, but that downscale (via core::ResampleRgba's nearest-neighbor
+// sampling) measurably smooths over exactly the fine per-pixel texture
+// noise this diagnostic exists to quantify -- a from-the-images fraction-
+// flagged calculation came out at 18.9% while the real run's own log line
+// (computed by core::ComputeContentMask on the actual full-resolution
+// buffers) said 46.5% for the very same frame. Any offline pixel analysis
+// of these files needs to match what the real algorithm actually sees.
 void SaveDebugImages(int screenWidth, int screenHeight, const DecodedImage& capture,
                       const DecodedImage& wallpaper) {
     const std::wstring dir = GetAppDataDirectory();
@@ -108,10 +117,8 @@ void SaveDebugImages(int screenWidth, int screenHeight, const DecodedImage& capt
         return;
     }
 
-    constexpr int kMaxDim = 1280;
-    const float scale = std::min(1.0f, static_cast<float>(kMaxDim) / static_cast<float>(std::max(screenWidth, screenHeight)));
-    const int outW = std::max(1, static_cast<int>(screenWidth * scale));
-    const int outH = std::max(1, static_cast<int>(screenHeight * scale));
+    const int outW = screenWidth;
+    const int outH = screenHeight;
 
     DecodedImage smallCapture;
     smallCapture.width = outW;
