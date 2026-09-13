@@ -8,6 +8,7 @@
 #include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
 #include "Renderer.h"
+#include "ScreenCapture.h"
 #include "WallpaperProvider.h"
 
 namespace platform {
@@ -162,6 +163,14 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
                 std::to_string(SampledAvgBrightness(desktopCapture->rgba.data(), pixelCount)) +
                 ", compositedWallpaper=" +
                 std::to_string(SampledAvgBrightness(compositedWallpaper.rgba.data(), pixelCount)) + " (/255)");
+            // Diagnostic (temporary, see ScreenCapture.h): if the capture is
+            // far brighter than both the decoded wallpaper and the composited
+            // reference above, while advancedColorEnabled below comes back
+            // true, that confirms Windows is tone-mapping the SDR desktop
+            // brighter for an HDR display -- something a plain file decode
+            // can never reproduce -- rather than a bug in this code's own
+            // decode or compositing math.
+            LogDisplayColorInfo();
         } else {
             core::Logger::Warn("AppController: failed to create desktop capture texture; content phase will be skipped");
         }
