@@ -41,12 +41,19 @@ struct ContentMaskConfig {
     // UI element produces against a photo background.
     int pixelDiffThreshold = 90;
     // A cell counts as real-desktop "content" once at least this fraction
-    // of its pixels differ. Widened from an earlier 0.03 (3%) for the same
-    // reason as pixelDiffThreshold above -- that texture-noise band isn't
-    // confined to a few odd pixels, it's spread widely enough across a
-    // detailed background that even a fairly generous per-pixel threshold
-    // alone wasn't enough to keep whole cells from tripping a 3% floor.
-    float cellDifferingFraction = 0.12f;
+    // of its pixels differ. Widened twice now (0.03 -> 0.12 -> 0.30): after
+    // fixing the visible background render to use the same properly-fit
+    // wallpaper as the diff (see AppController::Initialize), real-machine
+    // analysis of debug_capture.bmp/debug_wallpaper.bmp still found the
+    // busiest textured regions (a snow-capped mountain range) sitting at
+    // ~17-19% of pixels over pixelDiffThreshold -- comfortably below real
+    // content's actual rate (icons/taskbar/an open window measured at
+    // 70-100% in the same captures) but still above the old 0.12, which is
+    // why plain sky stayed correctly excluded while the mountain wrongly
+    // got swept in (user feedback: "空の部分は対象外になっているが山の部分
+    // は対象になってしまっている"). 0.30 sits with a clear margin above
+    // that texture-noise ceiling while staying far below real content's.
+    float cellDifferingFraction = 0.30f;
 };
 
 // Returns gridN*gridN bools, in the same row-major cell order as

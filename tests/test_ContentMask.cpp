@@ -125,14 +125,15 @@ TEST_CASE(ContentMask_ModeratePerPixelDiffBelowNewThresholdStaysFalse) {
 }
 
 TEST_CASE(ContentMask_ScatteredDiffBelowNewFractionStaysFalse) {
-    // A minority of a cell's pixels (10%, below the new 12% fraction) show a
-    // stark diff -- e.g. a few genuinely mismatched edge pixels scattered
-    // through an otherwise-matching cell -- shouldn't be enough to flag the
-    // whole cell as content on its own.
+    // A minority of a cell's pixels (25%, below the new 30% fraction) show a
+    // stark diff -- modeling the ~17-19% real-machine noise ceiling measured
+    // in a detailed textured background (see cellDifferingFraction's doc
+    // comment) plus some margin -- shouldn't be enough to flag the whole
+    // cell as content on its own.
     const int width = 100, height = 10, gridN = 1; // single 1000px cell
     auto capture = SolidBuffer(width, height, 0, 0, 0);
     auto wallpaper = SolidBuffer(width, height, 0, 0, 0);
-    FillRect(capture, width, 0, 0, 10, 10, 255, 255, 255); // 100/1000 = 10%
+    FillRect(capture, width, 0, 0, 25, 10, 255, 255, 255); // 250/1000 = 25%
     ContentMaskConfig config;
     config.screenWidth = width;
     config.screenHeight = height;
@@ -142,14 +143,14 @@ TEST_CASE(ContentMask_ScatteredDiffBelowNewFractionStaysFalse) {
 }
 
 TEST_CASE(ContentMask_ScatteredDiffAboveNewFractionIsFlagged) {
-    // Same setup as above but with enough genuinely differing pixels (15%,
-    // above the new 12% fraction) to still be recognized as real content --
+    // Same setup as above but with enough genuinely differing pixels (35%,
+    // above the new 30% fraction) to still be recognized as real content --
     // the widened threshold isn't a free pass for anything short of a
     // completely different image.
     const int width = 100, height = 10, gridN = 1; // single 1000px cell
     auto capture = SolidBuffer(width, height, 0, 0, 0);
     auto wallpaper = SolidBuffer(width, height, 0, 0, 0);
-    FillRect(capture, width, 0, 0, 15, 10, 255, 255, 255); // 150/1000 = 15%
+    FillRect(capture, width, 0, 0, 35, 10, 255, 255, 255); // 350/1000 = 35%
     ContentMaskConfig config;
     config.screenWidth = width;
     config.screenHeight = height;
