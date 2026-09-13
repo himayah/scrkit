@@ -7,6 +7,7 @@
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
+#include "PerfTimer.h"
 #include "Renderer.h"
 #include "WallpaperProvider.h"
 
@@ -25,6 +26,10 @@ AppController::~AppController() { Shutdown(); }
 bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
                                 const core::ConfigModel& config, const std::wstring& wallpaperPath,
                                 const DecodedImage* desktopCapture) {
+    // Diagnostic checkpoints (see PerfTimer.h): pins down which step of
+    // Initialize actually accounts for the ~2s reported at startup, instead
+    // of guessing further blind.
+    PerfTimer initTimer;
     screenWidth_ = screenWidthPx;
     screenHeight_ = screenHeightPx;
 
@@ -54,6 +59,8 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         core::Logger::Error("AppController: failed to create background texture");
         return false;
     }
+    core::Logger::Info("AppController::Initialize: background texture ready at " + initTimer.ElapsedMsString() +
+                        "ms");
 
     // 2. Particle count: resolve Auto/Custom/preset into a concrete count,
     //    then lay out the NxN grid (要件.txt §5, §6). Computed before the
@@ -81,6 +88,8 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     const float cellHeight = static_cast<float>(screenHeight_) / static_cast<float>(std::max(1, gridConfig.gridN));
     particleHalfWidthPx_ = cellWidth * 0.55f;
     particleHalfHeightPx_ = cellHeight * 0.55f;
+    core::Logger::Info("AppController::Initialize: particle grid ready at " + initTimer.ElapsedMsString() +
+                        "ms (gridN=" + std::to_string(gridConfig.gridN) + ")");
 
     // 3. Real desktop capture + content diff (optional): a still image of
     //    the real screen, diffed cell-by-cell against the wallpaper (same
@@ -124,10 +133,34 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             core::Logger::Info("AppController: " + std::to_string(contentParticles_.size()) + "/" +
                                 std::to_string(particles_.size()) +
                                 " grid cell(s) flagged as real desktop content");
+            // Diagnostic (see PerfTimer.h): user feedback reported plain
+            // black content blocks (instead of desktop image fragments)
+            // when the saver activated via real idle timeout -- if the
+            // capture's own average is far darker than the composited
+            // wallpaper's, that alone would explain it (the capture would
+            // be showing a screen that was already black when taken).
+            unsigned long long captureSum = 0, wallpaperSum = 0;
+            const size_t total = compositedWallpaper.rgba.size();
+            for (size_t i = 0; i + 3 < total; i += 4 * 97) {
+                captureSum += desktopCapture->rgba[i] + desktopCapture->rgba[i + 1] + desktopCapture->rgba[i + 2];
+                wallpaperSum += compositedWallpaper.rgba[i] + compositedWallpaper.rgba[i + 1] +
+                                compositedWallpaper.rgba[i + 2];
+            }
+            const size_t sampled = total / (4 * 97) + 1;
+            core::Logger::Info(
+                "AppController::Initialize: sampled avg brightness -- capture=" +
+                std::to_string(captureSum / (sampled * 3)) +
+                ", compositedWallpaper=" + std::to_string(wallpaperSum / (sampled * 3)) + " (/255)");
         } else {
             core::Logger::Warn("AppController: failed to create desktop capture texture; content phase will be skipped");
         }
+    } else if (desktopCapture) {
+        core::Logger::Warn("AppController: desktop capture size (" + std::to_string(desktopCapture->width) +
+                            "x" + std::to_string(desktopCapture->height) + ") does not match screen (" +
+                            std::to_string(screenWidth_) + "x" + std::to_string(screenHeight_) +
+                            "); content phase will be skipped");
     }
+    core::Logger::Info("AppController::Initialize: content diff done at " + initTimer.ElapsedMsString() + "ms");
 
     // 4. Suction center random walk (要件.txt §4: 速度は一定, 1〜3px/frame).
     rng_ = std::make_unique<core::Mt19937RandomSource>(std::random_device{}());
