@@ -3,6 +3,10 @@ build/
 build-*/
 out/
 *.scr
+# ...except the one at the repo root: that's the latest GitHub Actions
+# (windows-latest/MSVC) build, committed intentionally so it's available
+# without needing to run a build (see README.md「GitHub Actions でビルドする」).
+!/SpiralSuctionSaver.scr
 
 # Editor / OS cruft
 .vs/

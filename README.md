@@ -117,6 +117,31 @@ cmake --build build-win
 > DLL不足で起動に失敗してもエラーダイアログが表示されず「ボタンを押しても何も起きない」ように
 > 見えることがあります。
 
+### GitHub Actions でビルドする (Windows 環境が無い場合)
+
+`.github/workflows/build.yml` は `main` への push のたびに、`windows-latest` ランナー上で
+MSVC を使って実際に `.scr` をビルドし、Actions の実行結果にアーティファクト
+(`SpiralSuctionSaver-scr`) としてアップロードします（同時に Linux 上での `src/core/`
+ユニットテストも実行します）。Windows 実機や MinGW-w64 クロスコンパイル環境が手元に
+無くても、これだけで実際の Windows ビルドを取得できます。
+
+1. GitHub の対象リポジトリで「Actions」タブを開き、`build` ワークフローの実行から
+   対象のコミット（通常は最新の成功した push）を選びます。
+2. `gh` CLI がある場合は次のように実行できます。
+
+   ```bash
+   gh run list --repo <owner>/<repo> --limit 5           # 実行一覧から run ID を確認
+   gh run download <run-id> --repo <owner>/<repo> \
+       -n SpiralSuctionSaver-scr -D ./downloaded
+   ```
+
+   ブラウザから行う場合は、該当の Actions 実行ページを開き、「Artifacts」欄の
+   `SpiralSuctionSaver-scr` をクリックしてダウンロードします（zip 展開後に `.scr` が
+   出てきます）。
+3. リポジトリ直下の `SpiralSuctionSaver.scr` は、この方法で最新の `main` からビルドした
+   ものを都度コミットしてあります。ビルド環境を用意せずすぐ試したいだけであれば、これを
+   直接 [起動方法](#起動方法) の手順でそのまま使えます。
+
 ### コアロジックの単体テストのみをビルド (Windows 不要、Linux 上で完結)
 
 `src/core/` (らせん軌道計算・状態遷移・設定ファイルの解析など) は Windows に依存しないため、
