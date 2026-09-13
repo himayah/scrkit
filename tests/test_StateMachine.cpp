@@ -6,31 +6,26 @@ using core::SaverState;
 using core::SaverStateMachine;
 using core::StateMachineInputs;
 
-TEST_CASE(StateMachine_StartsAtIcons) {
+TEST_CASE(StateMachine_StartsAtContent) {
     SaverStateMachine sm;
-    CHECK(sm.Current() == SaverState::STATE_ICONS);
+    CHECK(sm.Current() == SaverState::STATE_CONTENT);
 }
 
 TEST_CASE(StateMachine_DoesNotAdvanceUntilConditionMet) {
     SaverStateMachine sm;
     StateMachineInputs inputs;
     CHECK(!sm.Advance(inputs));
-    CHECK(sm.Current() == SaverState::STATE_ICONS);
+    CHECK(sm.Current() == SaverState::STATE_CONTENT);
 }
 
 TEST_CASE(StateMachine_FollowsFullRequiredOrder) {
     SaverStateMachine sm;
     StateMachineInputs inputs;
 
-    inputs.allIconsConsumed = true;
-    CHECK(sm.Advance(inputs));
-    CHECK(sm.Current() == SaverState::STATE_WINDOWS);
-    inputs.allIconsConsumed = false;
-
-    inputs.allWindowsConsumed = true;
+    inputs.allContentConsumed = true;
     CHECK(sm.Advance(inputs));
     CHECK(sm.Current() == SaverState::STATE_BACKGROUND);
-    inputs.allWindowsConsumed = false;
+    inputs.allContentConsumed = false;
 
     inputs.allParticlesConsumed = true;
     CHECK(sm.Advance(inputs));
@@ -49,7 +44,7 @@ TEST_CASE(StateMachine_FollowsFullRequiredOrder) {
 
     inputs.resetHoldElapsed = true;
     CHECK(sm.Advance(inputs));
-    CHECK(sm.Current() == SaverState::STATE_ICONS); // loops back (要件: 無限ループ)
+    CHECK(sm.Current() == SaverState::STATE_CONTENT); // loops back (要件: 無限ループ)
 }
 
 TEST_CASE(StateMachine_UnrelatedFlagsDoNotCauseSkips) {
@@ -59,5 +54,5 @@ TEST_CASE(StateMachine_UnrelatedFlagsDoNotCauseSkips) {
     inputs.fadeComplete = true;
     inputs.resetHoldElapsed = true;
     CHECK(!sm.Advance(inputs));
-    CHECK(sm.Current() == SaverState::STATE_ICONS);
+    CHECK(sm.Current() == SaverState::STATE_CONTENT);
 }

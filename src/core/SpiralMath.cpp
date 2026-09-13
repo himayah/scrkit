@@ -11,6 +11,7 @@ namespace {
 // object spin an unbounded number of full turns in a single frame, which
 // reads as noise rather than a tightening spiral.
 constexpr float kMaxDTheta = 1.2f;
+constexpr float kPi = 3.14159265358979323846f;
 } // namespace
 
 SpiralState MakeSpiralState(float startX, float startY, float centerX, float centerY) {
@@ -48,6 +49,20 @@ Vec2 StepSpiral(SpiralState& state, const SpiralParams& params, float centerX, f
 
     return Vec2{centerX + state.r * std::cos(state.theta),
                 centerY + state.r * std::sin(state.theta)};
+}
+
+SpiralParams MakeParamsForRevolutions(float r0, float suctionSpeed, float targetRevolutions) {
+    SpiralParams params;
+    params.suctionSpeed = suctionSpeed;
+    params.centerAccelFactor = 0.0f;
+
+    const float speed = std::max(suctionSpeed, 0.0001f);
+    const float frames = r0 / speed;
+    // Below ~1 frame-to-consume, a derived dTheta would be enormous and
+    // meaningless (the object vanishes almost immediately regardless of
+    // angle) -- fall back to the normal constant instead.
+    params.dTheta = frames > 1.0f ? (targetRevolutions * 2.0f * kPi) / frames : NormalSpiralParams().dTheta;
+    return params;
 }
 
 } // namespace core

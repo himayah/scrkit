@@ -99,3 +99,30 @@ TEST_CASE(SpiralMath_VortexParamsHavePositiveCenterAccel) {
     CHECK(vortex.centerAccelFactor > 0.0f);
     CHECK_NEAR(vortex.dTheta, core::LightweightSpiralParams().dTheta, 0.0001f);
 }
+
+TEST_CASE(SpiralMath_MakeParamsForRevolutionsCompletesRequestedTurns) {
+    // r0 = 400, suctionSpeed = 2 -> exactly 200 frames to consume.
+    const float r0 = 400.0f;
+    const float suctionSpeed = 2.0f;
+    const float targetRevolutions = 4.0f;
+    auto params = core::MakeParamsForRevolutions(r0, suctionSpeed, targetRevolutions);
+    CHECK(params.centerAccelFactor == 0.0f);
+    CHECK_NEAR(params.suctionSpeed, suctionSpeed, 0.0001f);
+
+    auto state = core::MakeSpiralState(r0 + 100.0f, 100.0f, 100.0f, 100.0f); // r0 = 400
+    float totalTheta = 0.0f;
+    while (state.alive) {
+        const float before = state.theta;
+        core::StepSpiral(state, params, 100.0f, 100.0f);
+        totalTheta += (state.theta - before);
+    }
+    const float kTwoPi = 6.28318530718f;
+    CHECK_NEAR(totalTheta / kTwoPi, targetRevolutions, 0.05f);
+}
+
+TEST_CASE(SpiralMath_MakeParamsForRevolutionsFallsBackForTinyRadius) {
+    // r0 so small the object dies within one frame -- derived dTheta would
+    // be meaningless, so this should just be the normal fallback constant.
+    auto params = core::MakeParamsForRevolutions(0.5f, 2.0f, 4.0f);
+    CHECK_NEAR(params.dTheta, core::NormalSpiralParams().dTheta, 0.0001f);
+}

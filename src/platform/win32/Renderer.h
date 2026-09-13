@@ -4,44 +4,17 @@
 // This module knows nothing about the state machine or spiral math; it only
 // draws the vertex data AppController hands it each frame.
 
-#include <string>
 #include <vector>
 
 #include "GLCompat.h"
-#include "TextRenderer.h"
 
 namespace platform {
 
-// A rectangle to draw as-is (icon body, or a window's client area / title
-// bar). `x,y` is the top-left corner in screen pixel space.
-struct DrawRect {
-    float x = 0.0f;
-    float y = 0.0f;
-    float w = 0.0f;
-    float h = 0.0f;
-};
-
-// A rectangle plus the text label to draw at its top-left corner.
-struct DrawLabeledRect {
-    DrawRect rect;
-    std::string label;
-};
-
-// A rectangle to draw, plus the UV coordinates it should sample from a
-// "captured desktop" texture (i.e. what was really at this screen location
-// when the saver started) instead of a flat placeholder color. u0v0/u1v1
-// are ignored when the draw call is given a texture of 0.
-struct DrawCapturedRect {
-    DrawRect rect;
-    float u0 = 0.0f;
-    float v0 = 0.0f;
-    float u1 = 0.0f;
-    float v1 = 0.0f;
-};
-
 // A single particle: current center position + the UV cell it samples from
-// the background texture. Particle size is fixed (passed once, not per
-// particle) per 要件.txt §7.
+// a texture. Particle size is fixed (passed once, not per particle) per
+// 要件.txt §7. Used both for the "content" phase (real-desktop-capture
+// texture, only the grid cells core::ContentMask flagged as differing from
+// the wallpaper) and the background phase (wallpaper texture, every cell).
 struct DrawParticle {
     float x = 0.0f;
     float y = 0.0f;
@@ -63,44 +36,10 @@ void ClearBlack();
 // fade-in overlay) blended with the given alpha.
 void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHeightPx, float alpha);
 
-// Draws every icon body in a single glBegin(GL_QUADS)/glEnd batch. When
-// `captureTexture` is non-zero, each icon is textured with its captured
-// desktop clipping (user feedback: plain color boxes looked too bare);
-// when it is 0 (e.g. no capture available, or preview mode), falls back to
-// one fixed solid color (要件.txt §7: 固定色) as before.
-void DrawIconBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& icons);
-
-// One window's client area + title bar, plus which texture to draw them
-// with. `ownTexture` non-zero means this window has its own individual
-// PrintWindow capture (see RealDesktopQuery) covering exactly this window's
-// rect -- `client`/`title`'s UV coordinates are into that texture, not the
-// shared one, and it is drawn in its own single draw call, independent of
-// every other window (so it shows its own true content even where another
-// window currently overlaps it on the real screen). `ownTexture == 0` means
-// draw it batched together with every other such window, sampling the
-// shared fallback texture passed to DrawWindowBodiesBatched (or a solid
-// color, if that's 0 too).
-struct DrawWindowRect {
-    DrawCapturedRect client;
-    DrawCapturedRect title;
-    GLuint ownTexture = 0;
-};
-
-// Draws every window's client area, then every window's title bar. Windows
-// with their own capture texture (`ownTexture != 0`) are each drawn in
-// their own single batch; the rest are drawn together in one shared batch
-// per part, sampling `sharedTexture` (see DrawWindowRect above).
-void DrawWindowBodiesBatched(GLuint sharedTexture, const std::vector<DrawWindowRect>& windows);
-
 // Draws every particle in one glBegin(GL_QUADS)/glEnd batch, sampling from
 // `texture`. `halfSizePx` is the fixed half-width/height of every particle
-// quad (要件.txt §7: 粒子サイズは固定にする).
+// quad (要件.txt §7: 粒子サイズは固定にする). No-op when `texture` is 0 (e.g.
+// no desktop capture was available for the content phase).
 void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfSizePx);
-
-// Draws text labels for a set of rectangles (icon labels / window titles).
-// Not batched -- there are at most a few dozen of these per frame, far below
-// the particle counts §7 is concerned about.
-void DrawLabels(const TextRenderer& textRenderer, const std::vector<DrawLabeledRect>& items,
-                 float offsetX, float offsetY);
 
 } // namespace platform

@@ -15,7 +15,7 @@ flowchart TB
     subgraph core["src/core/ (プラットフォーム非依存, Linux でも単体テスト可能)"]
         SpiralMath
         SuctionCenterWalker
-        DesktopElements
+        ContentMask
         ParticleGrid
         StateMachine
         FadeController
@@ -48,11 +48,11 @@ flowchart TB
 
 | モジュール | 責務 |
 |---|---|
-| `SpiralMath` | θ+=dTheta, r-=speed のらせん軌道計算 (要件§4, §7)。`SpiralState`/`SpiralParams`/`StepSpiral`。`SpiralParams::centerAccelFactor`(>0)で中心に近づくほど角速度が増し、らせん状に歪む(追加要望対応、既定0で従来どおり)。 |
+| `SpiralMath` | θ+=dTheta, r-=speed のらせん軌道計算 (要件§4, §7)。`SpiralState`/`SpiralParams`/`StepSpiral`。`SpiralParams::centerAccelFactor`(>0)で中心に近づくほど角速度が増し、らせん状に歪む(追加要望対応、既定0で従来どおり)。`MakeParamsForRevolutions(r0, suctionSpeed, targetRevolutions)`は、開始半径`r0`から逆算したdThetaを返し、r0の大小にかかわらずほぼ指定回転数で中心に消えるようにする(追加要望: らせん回転をもっと緩やかにし3〜5周回するくらいにする)。 |
 | `SuctionCenterWalker` | 吸い込み中心のランダムウォーク (1〜3px/frame 相当、画面端で反射)。`IRandomSource` を注入して決定的にテスト可能。 |
-| `DesktopElements` | アイコン(20-40)・ウィンドウ(5-10)を矩形+ラベルとして模擬生成。**シード付きで決定的**であり、起動時に一度だけ生成して毎ループ再利用する (要件§4 step6)。実デスクトップは一切読み書きしない。 |
-| `ParticleGrid` | 背景画像を NxN 粒子に分割 (要件§5)。`ComputeGridDimensionForParticleCount` が希望粒子数から N を逆算。 |
-| `StateMachine` | `STATE_ICONS→WINDOWS→BACKGROUND→BLACK→FADE→RESET→ICONS` の純粋な遷移関数 (要件§8)。 |
+| `ContentMask` | 実画面キャプチャと壁紙画像をグリッドセル単位で差分判定し、「差分ブロック(=実際のアイコン/タスクバー/開いているウィンドウなど)」のセルだけを`true`にした`bool`配列を返す。`ResampleRgba`で壁紙画像を画面サイズへニアレストネイバー変換してから比較する。Windows非依存の純粋関数群。 |
+| `ParticleGrid` | 背景画像を NxN 粒子に分割 (要件§5)。`ComputeGridDimensionForParticleCount` が希望粒子数から N を逆算。差分ブロックフェーズもこの同じグリッドを`ContentMask`で絞り込んだ部分集合を使う。 |
+| `StateMachine` | `STATE_CONTENT→BACKGROUND→BLACK→FADE→RESET→CONTENT` の純粋な遷移関数 (要件§8)。`STATE_CONTENT`は旧`STATE_ICONS`/`STATE_WINDOWS`を統合したもの(§9参照)。 |
 | `FadeController` | 黒→背景画像のフェード (alpha 0→1、時間ベース)。 |
 | `ConfigModel` | 粒子数プリセット(Low/Mid/High/Max/Auto/Custom)+背景画像上書きパスと、iniテキストとの相互変換。不正な値は既定値にフォールバックする。 |
 | `GpuTierClassifier` | GL_VENDOR/RENDERER/VERSION 文字列→粒子数の純関数 (要件§6 自動判定)。実GLコンテキスト不要でテスト可能。 |
@@ -66,12 +66,10 @@ flowchart TB
 | `WinMain.cpp` | エントリポイント。`/s /c /p` 引数を解析しディスパッチする。 |
 | `SaverWindow` | フルスクリーン(/s)またはプレビュー子ウィンドウ(/p)の作成とメインループ (60fps目標、Update/Draw/SwapBuffers)。 |
 | `OpenGLContext` | PIXELFORMATDESCRIPTOR設定 + `wglCreateContext` + ダブルバッファ。GPU自動判定のための一時コンテキスト作成にも使う。 |
-| `AppController` | 状態機械・らせん状態・粒子・タイマーを保持し、`Update(dt)`/`Draw()` で要件§4の吸い込み順序を実行するオーケストレータ。 |
-| `Renderer` | 固定機能OpenGLの描画バッチ関数群 (アイコン・ウィンドウ・粒子をそれぞれ `glBegin`/`glEnd` 1回で描画、要件§7)。 |
-| `TextRenderer` | `wglUseFontBitmaps` によるビットマップフォント表示リストで、アイコン/ウィンドウのラベルを固定機能のまま描画。 |
+| `AppController` | 状態機械・らせん状態・粒子・タイマーを保持し、`Update(dt)`/`Draw()` で要件§4の吸い込み順序を実行するオーケストレータ。起動時に`core::ContentMask`で差分ブロックを決め、`core::ParticleGrid`の部分集合として吸い込み対象を持つ。 |
+| `Renderer` | 固定機能OpenGLの描画バッチ関数群 (全画面クアッド・粒子をそれぞれ `glBegin`/`glEnd` 1回で描画、要件§7)。差分ブロック・背景粒子はいずれも同じ`DrawParticlesBatched`を使う。 |
 | `ImageLoader` | Windows Imaging Component (WIC) でBMP/JPEG/PNG/GIFをデコードしGLテクスチャ化。外部画像ライブラリ不要。 |
-| `ScreenCapture` | `BitBlt`で画面を1回読み取り`DecodedImage`化(要件.txt後の追加要望: アイコン/ウィンドウ矩形を単色でなく実際の画面のクリッピングで描画)。読み取り専用。 |
-| `RealDesktopQuery` | 実アイコン/実ウィンドウの**位置**を読み取り専用で取得(要件.txt後の追加要望)。ウィンドウは`EnumWindows`+`GetWindowRect`/`DwmGetWindowAttribute`、アイコンは`Progman/WorkerW→SHELLDLL_DefView→SysListView32`に対し`LVM_GETITEMRECT`/`LVM_GETITEMTEXTW`をクロスプロセスメモリ経由で送信して取得。失敗時は呼び出し側が`DesktopElements`の乱数レイアウトにフォールバックする。 |
+| `ScreenCapture` | `BitBlt`で画面を1回読み取り`DecodedImage`化。`AppController`がこれを壁紙画像と差分判定し、差分ブロックのテクスチャとしても使う。読み取り専用。 |
 | `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得 (読み取り専用)。 |
 | `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。 |
 | `AppPaths` / `WinFileIO` | `%APPDATA%/SpiralSuctionSaver/{config.ini,saver.log}` の解決とワイド文字パスでのファイルI/O (非ASCIIユーザー名対策)。 |
@@ -82,30 +80,32 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> STATE_ICONS
-    STATE_ICONS --> STATE_WINDOWS: 全アイコン消滅
-    STATE_WINDOWS --> STATE_BACKGROUND: 全ウィンドウ消滅
+    [*] --> STATE_CONTENT
+    STATE_CONTENT --> STATE_BACKGROUND: 全差分ブロック消滅
     STATE_BACKGROUND --> STATE_BLACK: 全粒子消滅
     STATE_BLACK --> STATE_FADE: 一定時間経過
     STATE_FADE --> STATE_RESET: alpha=1到達
-    STATE_RESET --> STATE_ICONS: 一定時間経過（無限ループ）
+    STATE_RESET --> STATE_CONTENT: 一定時間経過（無限ループ）
 ```
 
 各フェーズの詳細:
 
-- **STATE_ICONS**: 背景画像を全画面に描画。ウィンドウは元の位置のまま静止表示。アイコンは
-  `SpiralMath` で中心へ吸い込まれ、r<=0で消滅する。フルスクリーン実行時は、`ScreenCapture`で
-  起動直後に取得した画面のクリッピングでアイコン矩形をテクスチャリングする
-  (`AppController::captureTexture_`が0のとき、すなわちプレビュー時や取得失敗時は単色にフォールバック)。
-- **STATE_WINDOWS**: アイコンは全消滅済みのため非表示。ウィンドウが吸い込まれる。ウィンドウの
-  クライアント領域・タイトルバーも同様に画面クリッピングでテクスチャリングされる。
+- **STATE_CONTENT**: 背景画像(壁紙)を全画面に描画したうえで、`core::ContentMask`が実画面
+  キャプチャと壁紙の差分から検出した「差分ブロック」(実際のアイコン・タスクバー・開いている
+  ウィンドウなど、壁紙の上に何か描かれている箇所)だけを、`ScreenCapture`のキャプチャ画像を
+  テクスチャにして`SpiralMath`で中心へ吸い込む。差分のなかったセルは最初から描画対象に
+  含まれないため、背景の壁紙がそのまま見え続ける(=「透明化」)。各ブロックは
+  `MakeParamsForRevolutions`で個別に算出したdThetaにより、開始距離に関わらずほぼ3〜5周回
+  してから中心に消える(追加要望対応)。実画面キャプチャが無い場合(プレビュー時・取得失敗時)は
+  差分ブロックが0件になり、このフェーズは実質的に即座にスキップされて`STATE_BACKGROUND`に進む。
 - **STATE_BACKGROUND**: 画面を黒でクリアしてから粒子をバッチ描画するため、吸い込まれた
   箇所から自然に黒が露出する。粒子の`SpiralParams`には`centerAccelFactor`(既定40)が設定され、
-  中心に近づくほど角速度が増してらせん状に歪む演出になる。
+  中心に近づくほど角速度が増してらせん状に歪む演出になる(STATE_CONTENTとは異なるパラメータ
+  セットであり、今回の「回転を緩やかに」対応の対象外)。
 - **STATE_BLACK**: 黒一色を一定時間 (1秒) 保持。
 - **STATE_FADE**: 黒背景の上に背景画像を alpha=0→1 でブレンド。
-- **STATE_RESET**: 背景・ウィンドウ・アイコンを全て元の位置で静止表示し、一定時間 (1.5秒)
-  保持してから `STATE_ICONS` に戻る。アイコン/ウィンドウは起動時に生成した同じレイアウトを
+- **STATE_RESET**: 背景(壁紙)と差分ブロックを全て元の位置で静止表示し、一定時間 (1.5秒)
+  保持してから `STATE_CONTENT` に戻る。差分ブロックは起動時に検出した同じ位置・同じ内容を
   再利用するため、要件§4 step6 の「元の位置に再描画」を満たす。
 
 ## 4. データフロー (1フレーム)
@@ -179,11 +179,12 @@ cmake --build build-tests
 ctest --test-dir build-tests --output-on-failure
 ```
 
-対象: `SpiralMath` の収束性・`centerAccelFactor`による角速度増加とクランプ挙動、
+対象: `SpiralMath` の収束性・`centerAccelFactor`による角速度増加とクランプ挙動・
+`MakeParamsForRevolutions`の目標回転数への収束と極小半径時のフォールバック、
 `SuctionCenterWalker` の境界反射、`StateMachine` の全遷移経路、
-`ParticleGrid` の件数・範囲、`ConfigModel` のini往復変換と不正値フォールバック、
-`GpuTierClassifier` の既知ベンダ文字列分類、`DesktopElements` の個数・範囲・再現性、
-`RandomSource` の値域。
+`ParticleGrid` の件数・範囲、`ContentMask` の差分判定(同一/差分セルのみ検出/閾値未満は
+無視)とリサンプルの正しさ、`ConfigModel` のini往復変換と不正値フォールバック、
+`GpuTierClassifier` の既知ベンダ文字列分類、`RandomSource` の値域。
 
 ### 8.2 結合テスト
 
@@ -205,40 +206,70 @@ Win32/OpenGL実装はLinux開発機でコンパイルできないため、GitHub
 
 ### 8.3 手動確認チェックリスト (Windows実機)
 
-- [ ] `SpiralSuctionSaver.scr /s` でフルスクリーン起動し、アイコン→ウィンドウ→背景粒子→
+- [ ] `SpiralSuctionSaver.scr /s` でフルスクリーン起動し、差分ブロック→背景粒子→
       黒→フェードイン→リセットの順にループすることを目視確認する。
 - [ ] キー入力・クリック・一定量のマウス移動で `/s` が終了することを確認する。
 - [ ] `SpiralSuctionSaver.scr /c` で設定ダイアログが開き、プリセット変更・カスタム値・
       Auto判定結果表示・背景画像の変更ができ、`config.ini` に保存されることを確認する。
 - [ ] Windowsの「スクリーンセーバーの設定」プレビュー枠で `/p` によるプレビューが表示され、
-      設定ダイアログを閉じるとプレビューも終了することを確認する。
+      設定ダイアログを閉じるとプレビューも終了することを確認する(プレビューは実画面キャプチャ
+      を行わないため差分ブロックフェーズはなく、背景粒子フェーズから始まって見える -- §9参照)。
 - [ ] 壁紙を変更した状態で上書き未設定のときに新しい壁紙が反映されることを確認する。
-- [ ] `/s` 実行時、アイコン・ウィンドウの矩形が単色ではなく起動直前の画面のクリッピング
-      画像で描画されることを確認する。
-- [ ] `/s` 実行時、アイコン・ウィンドウが実際にデスクトップにあった位置から吸い込まれる
-      ことを確認する(ランダムな位置に生成されていないこと)。
-- [ ] 背景粒子が吸い込まれる際、中心に近づくほど回転が速くなりらせん状に歪むことを確認する。
+- [ ] `/s` 実行時、実際のアイコン・タスクバー・開いているウィンドウなど壁紙の上に何か
+      表示されている箇所だけがブロックとして吸い込まれ、何もない箇所は最初から壁紙が
+      見えていることを確認する。
+- [ ] 差分ブロックが中心に吸い込まれるまでに、目視でおおよそ3〜5回転していることを確認する
+      (ブロックごとに開始位置からの回転数は個体差があってよい)。
+- [ ] 背景粒子が吸い込まれる際は、差分ブロックのフェーズとは別の回転演出(中心に近づくほど
+      回転が速くなりらせん状に歪む)になっていることを確認する。
+- [ ] Windowsの壁紙表示設定(塗りつぶし/フィット/中央/タイル等)によって、差分ブロックの
+      検出精度が変わらないか確認する(ズレが大きい場合は`core::ContentMaskConfig`の
+      `pixelDiffThreshold`/`cellDifferingFraction`を調整する)。
 
 ## 9. 既知の制約・スコープ外事項
 
 - マルチモニタは対象外とし、プライマリディスプレイの解像度のみを使用する
   (要件.txt に明記がないため、設計レビューでスコープを明示的に限定)。
-- 実デスクトップのアイコン配置・実際に開いているウィンドウの位置や個数は一切問い合わせず、
-  すべて模擬データ (`DesktopElements`) を用いる (要件§10 禁止事項準拠)。
-- 【追加要望への対応・2段階】当初の要件§3は「矩形+ラベルのみの抽象表現、位置はランダム
-  生成」だったが、実運用フィードバックを受けて2段階で変更した。
-  1. 「ただの箱に見える」→ 起動直後の画面を1回`BitBlt`で読み取り(`ScreenCapture`)、矩形の
-     見た目をそのクリッピングでテクスチャリングするよう変更(位置は依然ランダム)。
-  2. 「ランダムな位置ではなく実際にあった位置から吸い込んでほしい」→ `RealDesktopQuery`で
-     実アイコン/実ウィンドウの位置も取得し、`DesktopElements`の乱数レイアウトの代わりに
-     使うよう変更。
-  いずれも実アイコン/ウィンドウの**位置や見た目を読み取るだけ**で、移動・削除・設定変更を
-  行う操作ではないため、要件§10「実際のデスクトップを操作してはならない」には抵触しない
-  （操作＝変更を指し、読み取り専用の取得は含まないと解釈）。取得に失敗した場合
-  (別シェル利用時、セキュリティソフトによるブロック等)は、アイコン/ウィンドウそれぞれ独立に
-  `DesktopElements`の乱数レイアウトへフォールバックする。プレビュー表示 (`/p`) は簡易
-  シミュレーション用の縮小キャンバスで動作しており実画面座標と対応しないため、この2つの
-  機能はいずれも意図的にフルスクリーン (`/s`) のみに限定している。
-  また、実ラベル文字列(日本語のアプリ名等)は固定機能OpenGLのASCII専用ビットマップフォントでは
-  正しく描画できないため、`Renderer::DrawLabels`は非ASCII文字を含むラベルの文字描画を
-  スキップする(矩形自体は表示され、画面キャプチャが有効なら実際の文字は画像として見える)。
+- 実デスクトップのアイコン・ウィンドウを移動・削除・設定変更する操作は一切行わない
+  (要件§10 禁止事項準拠)。以下で述べる画面キャプチャ・差分判定はいずれも
+  **読み取り専用**であり、「操作」ではない。
+
+### 9.1 「実際にあった内容から吸い込んでほしい」への対応の変遷
+
+当初の要件§3は「矩形+ラベルのみの抽象表現、位置はランダム生成」だったが、実運用
+フィードバックを受けて複数段階で変更した。
+
+1. 「ただの箱に見える」→ 起動直後の画面を1回`BitBlt`で読み取り(`ScreenCapture`)、矩形の
+   見た目をそのクリッピングでテクスチャリングするよう変更(位置は依然ランダム)。
+2. 「ランダムな位置ではなく実際にあった位置から吸い込んでほしい」→ `EnumWindows`でウィンドウ
+   矩形を、アイコン用`ListView`のクロスプロセス読み取りでアイコン矩形を取得し、`DesktopElements`
+   の乱数レイアウトの代わりに使うよう変更。重なったウィンドウ/アイコンの見た目のずれ対策として、
+   さらに`PrintWindow`で個別ウィンドウ・アイコン層ごとにキャプチャする仕組みも追加した。
+3. **(今回)実機で試したところ2の個別クエリ方式は期待した見た目にならなかった**ため、
+   個別のアイコン/ウィンドウ矩形という抽象化そのものをやめ、**画面全体のキャプチャと
+   壁紙画像の差分だけで「差分ブロック」を決める**方式に置き換えた
+   (`EnumWindows`/アイコン`ListView`読み取り/`PrintWindow`個別キャプチャ、および
+   `DesktopElements`/`TextRenderer`は削除)。`core::ContentMask`が実画面キャプチャと
+   壁紙をグリッドセル単位で比較し、差分のあるセルだけを`AppController`が
+   `core::ParticleGrid`の部分集合として吸い込む。差分のないセルは最初から壁紙が
+   表示されているため、「差分がない部分は透明化して背景が見えるようにする」という
+   要望を自動的に満たす。個々のブロックがどのウィンドウ/アイコンに対応するかという
+   意味的な情報は失われるため、**文字ラベルの表示は廃止**した(差分方式では対応関係が
+   ないため付けられない)。
+
+  実画面キャプチャ・差分判定のいずれも**位置や見た目を読み取るだけ**で、移動・削除・
+  設定変更を行う操作ではないため、要件§10「実際のデスクトップを操作してはならない」には
+  抵触しない（操作＝変更を指し、読み取り専用の取得は含まないと解釈）。取得に失敗した場合
+  (画面キャプチャ失敗、壁紙デコード失敗等)は、差分ブロックが0件になり`STATE_CONTENT`
+  フェーズが実質スキップされるだけで、クラッシュや異常動作にはならない。
+  プレビュー表示 (`/p`) は意図的に画面キャプチャを行わない設計を維持しているため、
+  差分ブロックのフェーズは表示されず背景粒子フェーズから始まって見える。
+
+### 9.2 壁紙合成方式とのズレ
+
+`core::ContentMask`は壁紙画像を`core::ResampleRgba`でニアレストネイバーにより画面サイズへ
+引き伸ばして実画面キャプチャと比較する。これはWindowsの実際の壁紙表示設定(塗りつぶし/
+フィット/中央/タイル等)と完全には一致しない場合があり、ズレが大きいと差分が画面全体に
+出やすくなる(「差分ブロックだらけ」に近い見た目になる)。この場合も機能停止はせず、
+効果が薄まるだけである。`core::ContentMaskConfig`の`pixelDiffThreshold`/
+`cellDifferingFraction`は実機確認後に調整することを前提としたチューニング用の値である。

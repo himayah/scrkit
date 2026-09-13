@@ -5,9 +5,9 @@
 namespace core {
 
 // Parameters controlling how fast an object spirals into the suction center.
-// Two presets are used in practice: a "normal" one for icons/windows (few
-// objects), and a lighter one for background particles (many objects) per
-// 要件.txt §7 (θ += 0.1, r -= 0.5 など軽量化).
+// Two presets are used in practice: a "normal" one (also the fallback used
+// by MakeParamsForRevolutions below), and a lighter one for background
+// particles (many objects) per 要件.txt §7 (θ += 0.1, r -= 0.5 など軽量化).
 struct SpiralParams {
     float dTheta = 0.15f;      // angular step per frame (radians)
     float suctionSpeed = 2.0f; // radial shrink per frame (pixels)
@@ -48,6 +48,21 @@ struct Vec2 {
 // Initializes a SpiralState so that the object starts exactly at
 // (startX, startY) relative to (centerX, centerY).
 SpiralState MakeSpiralState(float startX, float startY, float centerX, float centerY);
+
+// Returns SpiralParams (centerAccelFactor = 0, constant angular speed) whose
+// dTheta is derived from `r0` (the object's starting distance from the
+// suction center) and `suctionSpeed` so the spiral completes almost exactly
+// `targetRevolutions` full turns by the time r reaches 0 -- i.e.
+// dTheta * (r0 / suctionSpeed) == targetRevolutions * 2π. This makes the
+// number of revolutions roughly the same regardless of how far an object
+// happens to start from the (randomly wandering) center, rather than
+// varying wildly with r0 under a single fixed dTheta (追加要望: らせん回転を
+// もっと緩やかにし、中心に吸い込まれるまでに3〜5周回するくらいにする -- callers
+// typically randomize targetRevolutions per object within [3,5) for organic
+// variety). Falls back to NormalSpiralParams().dTheta when r0 is small
+// enough that the object would be consumed in about a frame anyway, where a
+// derived dTheta would be meaninglessly large.
+SpiralParams MakeParamsForRevolutions(float r0, float suctionSpeed, float targetRevolutions);
 
 // Advances one frame: θ += dTheta (+ extra spin from centerAccelFactor as r
 // shrinks); r -= suctionSpeed; marks dead when r <= 0. Returns the new

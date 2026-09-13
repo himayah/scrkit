@@ -1,7 +1,7 @@
 #pragma once
-// Owns the whole animation: desktop layout, suction center, spiral states,
-// particle grid, state machine, and fade -- and turns them into per-frame
-// draw calls via Renderer (要件.txt §4, §8, Step 10 統合).
+// Owns the whole animation: content/background particle grids, suction
+// center, spiral states, state machine, and fade -- and turns them into
+// per-frame draw calls via Renderer (要件.txt §4, §8, Step 10 統合).
 
 #include <memory>
 #include <string>
@@ -10,7 +10,6 @@
 #include <windows.h>
 
 #include "../../core/ConfigModel.h"
-#include "../../core/DesktopElements.h"
 #include "../../core/FadeController.h"
 #include "../../core/ParticleGrid.h"
 #include "../../core/RandomSource.h"
@@ -18,16 +17,8 @@
 #include "../../core/StateMachine.h"
 #include "../../core/SuctionCenterWalker.h"
 #include "ImageLoader.h"
-#include "RealDesktopQuery.h"
-#include "TextRenderer.h"
 
 namespace platform {
-
-// UV rect into a "captured desktop" texture. Public (namespace-scope, not a
-// class member) so free helper functions can spell its name too.
-struct UvRect {
-    float u0 = 0.0f, v0 = 0.0f, u1 = 0.0f, v1 = 0.0f;
-};
 
 class AppController {
 public:
@@ -42,22 +33,18 @@ public:
     // (already resolved by the caller: config override, else system
     // wallpaper, possibly empty if neither is available).
     // `desktopCapture`, when non-null, is a still image of the real screen
-    // taken just before the saver's own window covered it; when provided,
-    // icon/window boxes are textured with their corresponding clipping of
-    // it instead of a flat color (caller must have captured it at the same
-    // pixel dimensions as screenWidthPx x screenHeightPx, i.e. this is only
-    // meaningful for the real fullscreen size, not a scaled-down preview).
-    // `realIcons`/`realWindows`, when non-null and non-empty, replace the
-    // randomly-generated layout with the real desktop icon/window positions
-    // (see RealDesktopQuery) so suction starts from where things really are.
-    // Each also carries its own capture(s) of its real appearance -- when
-    // present, that takes priority over `desktopCapture` for that element,
-    // so overlapped windows/icons still show their own true content rather
-    // than whatever currently overlaps them on the real screen.
+    // taken just before the saver's own window covered it (caller must have
+    // captured it at exactly screenWidthPx x screenHeightPx, i.e. this is
+    // only meaningful for the real fullscreen size, not a scaled-down
+    // preview). When present, it's diffed cell-by-cell against the wallpaper
+    // (see core::ContentMask) and only the cells that actually differ --
+    // real icons, the taskbar, open windows, anything drawn on top of the
+    // wallpaper right now -- become "content" particles that spiral into the
+    // suction center; cells with no difference are never drawn at all, so
+    // the wallpaper (already the base layer) simply shows through there.
+    // When absent, the content phase has nothing to show and is skipped.
     bool Initialize(HDC hdc, int screenWidthPx, int screenHeightPx, const core::ConfigModel& config,
-                    const std::wstring& wallpaperPath, const DecodedImage* desktopCapture = nullptr,
-                    const RealIconLayerInfo* realIcons = nullptr,
-                    const std::vector<RealWindowInfo>* realWindows = nullptr);
+                    const std::wstring& wallpaperPath, const DecodedImage* desktopCapture = nullptr);
 
     void Update(float dtSeconds);
     void Draw() const;
@@ -70,24 +57,12 @@ private:
     int screenHeight_ = 0;
     int resolvedParticleCount_ = 3000;
     GLuint backgroundTexture_ = 0;
-    GLuint captureTexture_ = 0;   // full-screen fallback; 0 when no desktop capture was supplied
-    GLuint iconLayerTexture_ = 0; // whole real icon layer, own capture; 0 when unavailable
-    // Per-window own capture texture, parallel to layout_.windows; 0 for a
-    // window with no capture of its own (falls back to captureTexture_, or
-    // a solid color if that's also 0). Never populated for the randomly
-    // generated (non-real) layout.
-    std::vector<GLuint> windowTextures_;
-    TextRenderer textRenderer_;
-    core::DesktopLayout layout_; // generated once; reused every loop (要件4-6)
-    std::vector<core::Particle> particles_; // generated once from the grid size
-
-    // UV rects for each icon / window's title bar and client area, computed
-    // once from their (fixed, original) layout position -- into
-    // iconLayerTexture_/windowTextures_[i] when that element has its own
-    // capture, else into captureTexture_ (unused when neither is available).
-    std::vector<UvRect> iconUv_;
-    std::vector<UvRect> windowTitleUv_;
-    std::vector<UvRect> windowClientUv_;
+    GLuint captureTexture_ = 0; // real-desktop capture; 0 when unavailable
+    std::vector<core::Particle> particles_; // full grid, generated once (background phase; 要件4-6)
+    // Subset of particles_ that core::ContentMask flagged as differing from
+    // the wallpaper -- i.e. the "content" to suck away first. Empty when no
+    // desktop capture was supplied or nothing was flagged.
+    std::vector<core::Particle> contentParticles_;
 
     // --- live simulation state ---
     std::unique_ptr<core::Mt19937RandomSource> rng_;
@@ -95,10 +70,15 @@ private:
     core::SaverStateMachine stateMachine_;
     core::FadeController fade_{2.0f}; // 2s black->image fade (要件4 step5)
 
-    std::vector<core::SpiralState> iconSpirals_;
-    std::vector<core::Vec2> iconCurrentPos_;
-    std::vector<core::SpiralState> windowSpirals_;
-    std::vector<core::Vec2> windowCurrentPos_;
+    std::vector<core::SpiralState> contentSpirals_;
+    std::vector<core::Vec2> contentCurrentPos_;
+    // Per-particle spiral params (unlike particleSpirals_ below, which all
+    // share one core::SpiralParams per frame): each content particle gets
+    // its own dTheta, derived from its own starting radius so it completes
+    // roughly the same number of revolutions regardless of how far it
+    // happens to start from the (randomly wandering) suction center -- see
+    // core::MakeParamsForRevolutions.
+    std::vector<core::SpiralParams> contentSpiralParams_;
     std::vector<core::SpiralState> particleSpirals_;
     std::vector<core::Vec2> particleCurrentPos_;
 
@@ -108,11 +88,11 @@ private:
     // configured particle count, then used unchanged for every particle for
     // the rest of the run -- still "fixed" per 要件.txt §7 (it never varies
     // per-particle or per-frame), just resolution/config-dependent rather
-    // than a hardcoded literal.
+    // than a hardcoded literal. Shared by the content and background
+    // phases, since both draw from the same grid.
     float particleHalfSizePx_ = 4.0f;
 
-    bool iconsInitialized_ = false;
-    bool windowsInitialized_ = false;
+    bool contentInitialized_ = false;
     bool particlesInitialized_ = false;
 
     float blackHoldTimer_ = 0.0f;
@@ -125,25 +105,25 @@ private:
     // phase -- makes the image visibly warp into a tighter spiral as it
     // nears the suction center (追加要望: 中心に近づくほど角速度を上げる).
     static constexpr float kParticleCenterAccelFactor = 40.0f;
+    // Radial shrink rate for content particles (要件.txt §4: r -= 吸い込み速度).
+    static constexpr float kContentSuctionSpeed = 2.0f;
+    // Content particles complete a randomized number of revolutions in this
+    // range before reaching the center (追加要望: らせん回転をもっと緩やかに
+    // し、3〜5周回するくらいで吸い込む) -- see core::MakeParamsForRevolutions.
+    static constexpr float kContentMinRevolutions = 3.0f;
+    static constexpr float kContentMaxRevolutions = 5.0f;
 
-    void EnsureIconSpiralsInit(core::Vec2 centerPos);
-    void EnsureWindowSpiralsInit(core::Vec2 centerPos);
+    void EnsureContentSpiralsInit(core::Vec2 centerPos);
     void EnsureParticleSpiralsInit(core::Vec2 centerPos);
 
-    void StepIconSpirals(core::Vec2 centerPos);
-    void StepWindowSpirals(core::Vec2 centerPos);
+    void StepContentSpirals(core::Vec2 centerPos);
     void StepParticleSpirals(core::Vec2 centerPos);
 
     void OnStateEntered(core::SaverState newState, core::Vec2 centerPos);
 
-    void DrawIconsPhase() const;
-    void DrawWindowsPhase() const;
+    void DrawContentPhase() const;
     void DrawBackgroundPhase() const;
     void DrawResetPhase() const;
-
-    // windowTextures_[i], or 0 if i is out of range (e.g. randomly generated
-    // layout, which never has per-window captures).
-    GLuint WindowTexture(size_t i) const;
 };
 
 } // namespace platform

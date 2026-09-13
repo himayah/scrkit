@@ -4,14 +4,8 @@ namespace core {
 
 bool SaverStateMachine::Advance(const StateMachineInputs& inputs) {
     switch (state_) {
-        case SaverState::STATE_ICONS:
-            if (inputs.allIconsConsumed) {
-                state_ = SaverState::STATE_WINDOWS;
-                return true;
-            }
-            return false;
-        case SaverState::STATE_WINDOWS:
-            if (inputs.allWindowsConsumed) {
+        case SaverState::STATE_CONTENT:
+            if (inputs.allContentConsumed) {
                 state_ = SaverState::STATE_BACKGROUND;
                 return true;
             }
@@ -36,7 +30,7 @@ bool SaverStateMachine::Advance(const StateMachineInputs& inputs) {
             return false;
         case SaverState::STATE_RESET:
             if (inputs.resetHoldElapsed) {
-                state_ = SaverState::STATE_ICONS;
+                state_ = SaverState::STATE_CONTENT;
                 return true;
             }
             return false;
