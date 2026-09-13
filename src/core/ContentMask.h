@@ -62,16 +62,37 @@ struct ContentMaskConfig {
 // away. Both buffers must already be screenWidth x screenHeight RGBA8 (top-
 // down), matching `config`.
 //
-// Before diffing, `wallpaperRgba` is rescaled by a single global brightness
-// gain (captureRgba's overall mean / wallpaperRgba's overall mean, clamped
-// to a sane range) so a uniform brightness offset between the two doesn't
-// itself register as "content" -- real-machine feedback showed Windows
-// tone-maps the whole desktop noticeably brighter than a wallpaper file's
-// raw pixels when the display has HDR/"Advanced color" enabled (~1.7x
-// brighter on a real 4K HDR screen), which otherwise pushed nearly every
-// cell's diff over pixelDiffThreshold and flagged ~97% of the screen as
-// content. A plain SDR display has no such offset, so the computed gain
-// there is ~1.0 and this is a no-op.
+// Two corrections run before the actual per-pixel diff:
+//
+// 1. `wallpaperRgba` is rescaled by a brightness gain -- the *median* of
+//    the per-pixel capture/wallpaper luminance ratio, not a single ratio of
+//    the two images' overall sums -- so a uniform brightness offset between
+//    the two doesn't itself register as "content". Real-machine feedback
+//    showed Windows tone-maps the whole desktop noticeably brighter than a
+//    wallpaper file's raw pixels when the display has HDR/"Advanced color"
+//    enabled (~1.7x brighter on a real 4K HDR screen); on a plain SDR
+//    display there's no such offset, so the computed gain is ~1.0 there
+//    and this is a no-op either way. Using the median instead of a sum
+//    ratio matters once real content is on screen: a sum-based ratio is
+//    skewed by however much of the *content* differs too (real-machine
+//    feedback: with a large window open, the sum-based ratio came out as
+//    1.2x and made the false-positive rate on the plain background *worse*,
+//    not better, since it "corrected" background pixels that never needed
+//    it based on a number contaminated by the window). The median stays
+//    representative of the actual background as long as background pixels
+//    remain the majority of the screen, which they normally are.
+// 2. Both `captureRgba` and the gain-corrected wallpaper are then run
+//    through the same small box blur before the pixel-by-pixel diff. An
+//    independently decoded and resized wallpaper can never reproduce the
+//    real screen's own rendering pixel-for-pixel, and that mismatch
+//    concentrates as edge/anti-aliasing noise in detailed textures --
+//    real-machine feedback found a snow-capped mountain wallpaper still
+//    getting swept into the suction effect well after the brightness/crop
+//    fixes, while smooth areas like sky were already fine. Blurring both
+//    images by the same amount suppresses that sub-pixel-scale noise
+//    equally on both sides while leaving real content (icons, taskbar,
+//    open windows -- all much larger and starkly different) essentially
+//    untouched.
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config);
 

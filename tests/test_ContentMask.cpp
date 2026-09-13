@@ -159,6 +159,70 @@ TEST_CASE(ContentMask_ScatteredDiffAboveNewFractionIsFlagged) {
     for (bool cell : mask) CHECK(cell);
 }
 
+TEST_CASE(ContentMask_MedianGainIgnoresLargeContentOutlier) {
+    // Real-machine feedback: with a large window genuinely open (darker
+    // than the wallpaper, since the wallpaper reference never has windows
+    // in it), the *old* sum-of-sums gain got dragged down by that window
+    // and computed a gain that then wrongly distorted the *background*
+    // pixels elsewhere on screen -- background that needed no correction
+    // at all got misflagged as content because of it. The median-based
+    // gain (see ComputeRobustBrightnessGain) should stay close to 1.0 here
+    // since matching background pixels are still the majority (60%),
+    // leaving that background correctly unflagged while the dark "window"
+    // region (40%) still is.
+    const int width = 100, height = 100, gridN = 10; // 10x10 cells, 10x10px each
+    auto wallpaper = SolidBuffer(width, height, 150, 150, 150);
+    auto capture = SolidBuffer(width, height, 150, 150, 150);
+    FillRect(capture, width, 0, 0, 40, height, 10, 10, 10); // 40% dark "window"
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+
+    // Bottom-right cell (col=9, row=9) is far from the window's edge (well
+    // outside the box blur's radius), so it should see a clean, unflagged
+    // background match.
+    CHECK(!mask[9 * gridN + 9]);
+    // The window region itself should still be flagged as real content.
+    CHECK(mask[0 * gridN + 0]);
+}
+
+TEST_CASE(ContentMask_BoxBlurSuppressesPeriodicPixelNoise) {
+    // Models the fine, high-frequency edge/anti-aliasing noise a detailed
+    // photographic wallpaper shows once decoded and scaled by a different
+    // pipeline than whatever rendered the real screen (see
+    // ComputeContentMask's doc comment): every 5th pair of columns (2 out
+    // of every 5 -- 40% of pixels, comfortably above cellDifferingFraction)
+    // spikes to a starkly different value. Pre-blur that alone would
+    // exceed both pixelDiffThreshold and cellDifferingFraction and flag the
+    // cell; post-blur, a (2*radius+1)=5-wide box averages each 5-column
+    // period down to the same blended value everywhere, well under
+    // pixelDiffThreshold. The clear 60% matching majority also keeps the
+    // median-based gain at 1.0, isolating this test to the blur behavior
+    // specifically (see ContentMask_MedianGainIgnoresLargeContentOutlier
+    // for the gain side).
+    const int width = 20, height = 20, gridN = 1; // single 400px cell
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+    auto capture = SolidBuffer(width, height, 100, 100, 100);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (x % 5 < 2) {
+                uint8_t* p = &capture[(static_cast<size_t>(y) * width + x) * 4];
+                p[0] = 250; // |250-100| = 150, comfortably over pixelDiffThreshold
+            }
+        }
+    }
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    for (bool cell : mask) CHECK(!cell);
+}
+
 TEST_CASE(ContentMask_UniformBrightnessOffsetDoesNotFlagPlainBackground) {
     // Simulates Windows tone-mapping the whole desktop brighter than the
     // wallpaper file's raw pixels when HDR/"Advanced color" is enabled
