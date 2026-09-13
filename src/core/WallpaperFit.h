@@ -37,4 +37,23 @@ void CompositeWallpaper(const uint8_t* src, int srcW, int srcH, uint8_t* dst, in
                          WallpaperFitMode mode, uint8_t letterboxR, uint8_t letterboxG,
                          uint8_t letterboxB);
 
+// Like CompositeWallpaper, but for Fill/Span specifically: instead of
+// assuming the crop that "cover" scaling leaves on the wider axis is
+// centered, searches a range of crop offsets along that axis and keeps
+// whichever one best matches `referenceRgba` (already dstW x dstH RGBA8 --
+// in practice, a real screen capture taken at the same time). Windows can
+// crop off-center (Windows Spotlight/slideshow wallpapers carry a "smart
+// crop" focus point that isn't necessarily the image's geometric center),
+// which a plain centered-crop assumption has no way to reproduce -- on a
+// real machine with a wallpaper file whose aspect ratio didn't match an
+// ultrawide screen, that mismatch showed up as a large, consistent vertical
+// misalignment between this code's own composited reference and the real
+// capture, which in turn made core::ContentMask flag almost the entire
+// screen as "content". Falls back to plain CompositeWallpaper for every
+// other mode, when `referenceRgba` is null, or when there's no crop slack
+// to search (the image's aspect ratio already matches the canvas).
+void CompositeWallpaperAligned(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH,
+                                WallpaperFitMode mode, uint8_t letterboxR, uint8_t letterboxG,
+                                uint8_t letterboxB, const uint8_t* referenceRgba);
+
 } // namespace core

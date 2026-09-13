@@ -3,6 +3,7 @@
 #include "../src/core/WallpaperFit.h"
 
 using core::CompositeWallpaper;
+using core::CompositeWallpaperAligned;
 using core::WallpaperFitMode;
 
 namespace {
@@ -89,6 +90,60 @@ TEST_CASE(CompositeWallpaper_FillCoversEntireCanvasWithNoLetterbox) {
             CHECK_EQ(p[2], static_cast<uint8_t>(30));
         }
     }
+}
+
+TEST_CASE(CompositeWallpaperAligned_FindsOffCenterCropMatchingReference) {
+    // 100x200 source (tall), 100x50 canvas under Fill: scale = max(100/100,
+    // 50/200) = 1, so scaledW=100 (no horizontal slack) but scaledH=200
+    // against a 50px-tall canvas -- a big vertical crop, same shape of
+    // mismatch as the real ultrawide-screen/4K-wallpaper case that motivated
+    // this function. Each source row gets a distinct color (row index as
+    // red channel) so any crop position is unambiguous to check.
+    const int srcW = 100, srcH = 200, dstW = 100, dstH = 50;
+    std::vector<uint8_t> src(static_cast<size_t>(srcW) * srcH * 4);
+    for (int y = 0; y < srcH; ++y) {
+        for (int x = 0; x < srcW; ++x) {
+            uint8_t* p = &src[(static_cast<size_t>(y) * srcW + x) * 4];
+            p[0] = static_cast<uint8_t>(y);
+            p[1] = 0;
+            p[2] = 0;
+            p[3] = 255;
+        }
+    }
+
+    // The "real capture" is rows [122, 172) of the source -- deliberately
+    // not centered (a naive centered crop would instead pick [75, 125)).
+    // 122 is chosen to land exactly on the search's coarse stride (see
+    // kOffsetStep in CompositeWallpaperAligned) so this test isn't sensitive
+    // to that implementation detail.
+    constexpr int kTrueOffsetRow = 122;
+    std::vector<uint8_t> reference(static_cast<size_t>(dstW) * dstH * 4);
+    for (int y = 0; y < dstH; ++y) {
+        std::copy(src.begin() + (static_cast<size_t>(kTrueOffsetRow + y) * srcW) * 4,
+                  src.begin() + (static_cast<size_t>(kTrueOffsetRow + y) * srcW + srcW) * 4,
+                  reference.begin() + static_cast<size_t>(y) * dstW * 4);
+    }
+
+    std::vector<uint8_t> dst(static_cast<size_t>(dstW) * dstH * 4, 0);
+    CompositeWallpaperAligned(src.data(), srcW, srcH, dst.data(), dstW, dstH, WallpaperFitMode::Fill, 0, 0, 0,
+                               reference.data());
+
+    // The aligned composite should match the true (off-center) crop, not
+    // the naive centered one.
+    CHECK_EQ(PixelAt(dst, dstW, 0, 0)[0], static_cast<uint8_t>(kTrueOffsetRow));
+    CHECK_EQ(PixelAt(dst, dstW, 0, dstH - 1)[0], static_cast<uint8_t>(kTrueOffsetRow + dstH - 1));
+}
+
+TEST_CASE(CompositeWallpaperAligned_FallsBackWhenAspectRatiosAlreadyMatch) {
+    // No crop slack on either axis -- should behave exactly like plain
+    // CompositeWallpaper regardless of what `referenceRgba` says.
+    auto src = SolidBuffer(4, 4, 5, 6, 7);
+    auto reference = SolidBuffer(4, 4, 200, 200, 200); // deliberately different, should be ignored
+    std::vector<uint8_t> dst(4 * 4 * 4, 0);
+    CompositeWallpaperAligned(src.data(), 4, 4, dst.data(), 4, 4, WallpaperFitMode::Fill, 0, 0, 0,
+                               reference.data());
+    CHECK_EQ(PixelAt(dst, 4, 2, 2)[0], static_cast<uint8_t>(5));
+    CHECK_EQ(PixelAt(dst, 4, 2, 2)[1], static_cast<uint8_t>(6));
 }
 
 TEST_CASE(CompositeWallpaper_StretchIgnoresAspectAndFillsWholeCanvas) {

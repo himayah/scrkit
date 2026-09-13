@@ -225,14 +225,23 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             // stretch only matches the "Stretch" style, and mismatches
             // elsewhere (Fill, the Windows 10/11 default, crops instead)
             // made the diff flag large swaths of plain background as
-            // "content" (user feedback).
+            // "content" (user feedback). Uses the *aligned* variant, which
+            // for Fill/Span searches the real capture for the actual crop
+            // position instead of assuming it's centered -- user feedback
+            // (real machine, an ultrawide 2560x1080 screen with a 3840x2160
+            // wallpaper file) showed a large, consistent vertical
+            // misalignment from that centered-crop assumption, most likely
+            // because the wallpaper carries an off-center "smart crop"
+            // (e.g. Windows Spotlight) that isn't the image's geometric
+            // center.
             DecodedImage compositedWallpaper;
             compositedWallpaper.width = screenWidth_;
             compositedWallpaper.height = screenHeight_;
             compositedWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
-            core::CompositeWallpaper(image.rgba.data(), image.width, image.height,
-                                      compositedWallpaper.rgba.data(), screenWidth_, screenHeight_,
-                                      GetSystemWallpaperFitMode(), desktopR, desktopG, desktopB);
+            core::CompositeWallpaperAligned(image.rgba.data(), image.width, image.height,
+                                             compositedWallpaper.rgba.data(), screenWidth_, screenHeight_,
+                                             GetSystemWallpaperFitMode(), desktopR, desktopG, desktopB,
+                                             desktopCapture->rgba.data());
 
             core::ContentMaskConfig maskConfig;
             maskConfig.screenWidth = screenWidth_;
