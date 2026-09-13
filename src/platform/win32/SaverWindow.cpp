@@ -9,7 +9,6 @@
 #include "AppController.h"
 #include "AppPaths.h"
 #include "OpenGLContext.h"
-#include "PerfTimer.h"
 #include "Renderer.h"
 #include "ScreenCapture.h"
 #include "StringConvert.h"
@@ -150,28 +149,17 @@ void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
     // AppController::Initialize below reuses the very same capture for the
     // real content-phase textures, so the transition into the actual
     // animation is seamless once it's ready.
-    PerfTimer previewTimer;
     GLuint previewTexture = desktopCapture ? CreateTextureFromImage(*desktopCapture) : 0;
     if (previewTexture != 0) {
         DrawFullscreenTexturedQuad(previewTexture, width, height, 1.0f);
         gl.SwapBuffers();
     }
-    // Diagnostic logging (see PerfTimer.h): a black screen was reported at
-    // startup that earlier fixes (creating the window hidden; drawing this
-    // preview quad before Initialize) did not resolve, so this pins down
-    // where the time actually goes and whether the preview texture step
-    // itself is the bottleneck, instead of guessing further blind.
-    core::Logger::Info("RunMessageLoop: preview quad step took " + previewTimer.ElapsedMsString() +
-                        "ms (texture=" + (previewTexture != 0 ? "ok" : "none/skipped") + ")");
 
     core::ConfigModel config = LoadConfigOrDefault();
     std::wstring wallpaper = ResolveWallpaperPath(config);
 
-    PerfTimer initTimer;
     AppController app;
     const bool initialized = app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture);
-    core::Logger::Info("RunMessageLoop: AppController::Initialize took " + initTimer.ElapsedMsString() +
-                        "ms, success=" + (initialized ? "yes" : "no"));
     if (previewTexture != 0) {
         glDeleteTextures(1, &previewTexture);
     }
@@ -241,31 +229,8 @@ void RunFullScreenSaver(HINSTANCE instance) {
     // of querying/capturing individual windows and icons, which did not
     // hold up in practice (user feedback). A capture failure is non-fatal --
     // AppController just skips the content phase when passed nullptr.
-    PerfTimer captureTimer;
     DecodedImage desktopCapture;
     const bool haveCapture = CaptureScreenToImage(width, height, desktopCapture);
-    // Diagnostic logging (see PerfTimer.h): user feedback reported a ~2s
-    // black screen at startup, and separately that the content blocks were
-    // plain black instead of showing desktop image fragments when the saver
-    // activated via real idle timeout -- both would be explained by the
-    // capture itself being (near-)black at the moment it was taken, so log
-    // a cheap sparse-sampled brightness estimate to check that directly,
-    // alongside how long the capture call itself took.
-    core::Logger::Info("RunFullScreenSaver: capture took " + captureTimer.ElapsedMsString() +
-                        "ms, success=" + (haveCapture ? "yes" : "no"));
-    if (haveCapture) {
-        unsigned long long sum = 0;
-        size_t sampled = 0;
-        for (size_t i = 0; i + 3 < desktopCapture.rgba.size(); i += 4 * 97) { // sparse, cheap
-            sum += desktopCapture.rgba[i] + desktopCapture.rgba[i + 1] + desktopCapture.rgba[i + 2];
-            ++sampled;
-        }
-        const long long avgBrightness =
-            sampled > 0 ? static_cast<long long>(sum / (sampled * 3)) : -1;
-        core::Logger::Info("RunFullScreenSaver: capture sampled average brightness = " +
-                            std::to_string(avgBrightness) + " / 255 (" + std::to_string(sampled) +
-                            " sample(s))");
-    }
     if (!haveCapture) {
         core::Logger::Warn("RunFullScreenSaver: desktop capture failed; content phase will be skipped");
     }
@@ -273,22 +238,16 @@ void RunFullScreenSaver(HINSTANCE instance) {
     WindowContext ctx;
     ctx.mode = WindowMode::Fullscreen;
 
-    // EXPERIMENTAL (diagnostic): create the window 1px taller than the
-    // display instead of exactly matching it. Everything measured in-
-    // process (capture, window creation, GL init, AppController::
-    // Initialize) consistently completes in well under 200ms per
-    // PerfTimer's logging, yet a ~2s black screen is still visible at
-    // startup -- pointing at something in the OS/GPU-driver/display
-    // presentation path outside application-level timing, most plausibly a
-    // fullscreen-detection heuristic that switches to a different
-    // presentation/flip mode (and briefly blanks the physical display)
-    // specifically because this window's bounds exactly match the
-    // monitor's. The extra row falls off the bottom edge of the monitor
-    // and is never drawn to (the GL viewport below still uses the real
-    // width x height), so this should have no visible effect on its own --
-    // it exists purely to test whether avoiding an exact bounds match
-    // avoids that OS-level transition.
-    PerfTimer windowTimer;
+    // The window is created 1px taller than the display, not exactly
+    // matching it. A window whose bounds exactly match the monitor can
+    // trigger an OS/GPU-driver fullscreen-detection heuristic that switches
+    // to a different presentation/flip path -- confirmed on real hardware
+    // to cause a ~2s black screen at startup (every step measured
+    // in-process consistently completed in under 200ms, so the delay was
+    // entirely in that OS-level transition, not our own code). The extra
+    // row falls off the bottom edge of the monitor and is never drawn to
+    // (the GL viewport below still uses the real width x height), so this
+    // has no visible effect beyond avoiding that transition.
     HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kWindowClassName, L"Spiral Suction Saver",
                                  WS_POPUP | WS_VISIBLE, 0, 0, width, height + 1, nullptr, nullptr,
                                  instance, nullptr);
@@ -301,12 +260,9 @@ void RunFullScreenSaver(HINSTANCE instance) {
     ShowCursor(FALSE);
     SetForegroundWindow(hwnd);
     SetFocus(hwnd);
-    core::Logger::Info("RunFullScreenSaver: window created+focused at " + windowTimer.ElapsedMsString() + "ms");
 
-    PerfTimer glTimer;
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        core::Logger::Info("RunFullScreenSaver: OpenGLContext::Create took " + glTimer.ElapsedMsString() + "ms");
         RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr);
         gl.Destroy();
     } else {
