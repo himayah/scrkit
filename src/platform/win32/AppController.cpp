@@ -5,6 +5,7 @@
 
 #include "../../core/ContentMask.h"
 #include "../../core/Logger.h"
+#include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
 #include "Renderer.h"
 #include "WallpaperProvider.h"
@@ -36,14 +37,17 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     //    background and the content diff below actually match what's really
     //    on screen (user feedback: a visibly-wrong flat placeholder color was
     //    showing through wherever content particles had been sucked away).
+    // Also used below as the letterbox fill color for Center/Fit wallpaper
+    // styles, so read it unconditionally.
+    uint8_t desktopR = 30, desktopG = 40, desktopB = 60;
+    GetSystemDesktopColor(desktopR, desktopG, desktopB);
+
     DecodedImage image;
     if (wallpaperPath.empty() || !DecodeImageFile(wallpaperPath, image)) {
         if (!wallpaperPath.empty()) {
             core::Logger::Warn("AppController: falling back to placeholder background image");
         }
-        uint8_t r = 30, g = 40, b = 60;
-        GetSystemDesktopColor(r, g, b);
-        image = MakeFallbackImage(r, g, b);
+        image = MakeFallbackImage(desktopR, desktopG, desktopB);
     }
     backgroundTexture_ = CreateTextureFromImage(image);
     if (backgroundTexture_ == 0) {
@@ -88,19 +92,26 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     if (desktopCapture && desktopCapture->width == screenWidth_ && desktopCapture->height == screenHeight_) {
         captureTexture_ = CreateTextureFromImage(*desktopCapture);
         if (captureTexture_ != 0) {
-            DecodedImage resampledWallpaper;
-            resampledWallpaper.width = screenWidth_;
-            resampledWallpaper.height = screenHeight_;
-            resampledWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
-            core::ResampleRgba(image.rgba.data(), image.width, image.height, resampledWallpaper.rgba.data(),
-                                screenWidth_, screenHeight_);
+            // Composite the wallpaper the same way Windows actually
+            // positions/scales it (Fill/Fit/Stretch/Center/Tile) -- a plain
+            // stretch only matches the "Stretch" style, and mismatches
+            // elsewhere (Fill, the Windows 10/11 default, crops instead)
+            // made the diff flag large swaths of plain background as
+            // "content" (user feedback).
+            DecodedImage compositedWallpaper;
+            compositedWallpaper.width = screenWidth_;
+            compositedWallpaper.height = screenHeight_;
+            compositedWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
+            core::CompositeWallpaper(image.rgba.data(), image.width, image.height,
+                                      compositedWallpaper.rgba.data(), screenWidth_, screenHeight_,
+                                      GetSystemWallpaperFitMode(), desktopR, desktopG, desktopB);
 
             core::ContentMaskConfig maskConfig;
             maskConfig.screenWidth = screenWidth_;
             maskConfig.screenHeight = screenHeight_;
             maskConfig.gridN = gridConfig.gridN;
             const std::vector<bool> mask = core::ComputeContentMask(
-                desktopCapture->rgba.data(), resampledWallpaper.rgba.data(), maskConfig);
+                desktopCapture->rgba.data(), compositedWallpaper.rgba.data(), maskConfig);
 
             for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
                 if (mask[i]) contentParticles_.push_back(particles_[i]);

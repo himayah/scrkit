@@ -16,6 +16,7 @@ flowchart TB
         SpiralMath
         SuctionCenterWalker
         ContentMask
+        WallpaperFit
         ParticleGrid
         StateMachine
         FadeController
@@ -50,7 +51,8 @@ flowchart TB
 |---|---|
 | `SpiralMath` | θ+=dTheta, r-=speed のらせん軌道計算 (要件§4, §7)。`SpiralState`/`SpiralParams`/`StepSpiral`。`SpiralParams::centerAccelFactor`(>0)で中心に近づくほど角速度が増し、らせん状に歪む(追加要望対応、既定0で従来どおり)。`MakeParamsForRevolutions(r0, suctionSpeed, targetRevolutions)`は、開始半径`r0`から逆算したdThetaを返し、r0の大小にかかわらずほぼ指定回転数で中心に消えるようにする(追加要望: らせん回転をもっと緩やかにし3〜5周回するくらいにする)。 |
 | `SuctionCenterWalker` | 吸い込み中心のランダムウォーク (1〜3px/frame 相当、画面端で反射)。`IRandomSource` を注入して決定的にテスト可能。 |
-| `ContentMask` | 実画面キャプチャと壁紙画像をグリッドセル単位で差分判定し、「差分ブロック(=実際のアイコン/タスクバー/開いているウィンドウなど)」のセルだけを`true`にした`bool`配列を返す。`ResampleRgba`で壁紙画像を画面サイズへニアレストネイバー変換してから比較する。Windows非依存の純粋関数群。 |
+| `ContentMask` | 実画面キャプチャと壁紙画像をグリッドセル単位で差分判定し、「差分ブロック(=実際のアイコン/タスクバー/開いているウィンドウなど)」のセルだけを`true`にした`bool`配列を返す。比較対象の壁紙画像は`WallpaperFit`で画面サイズへ合成済みのものを渡す。Windows非依存の純粋関数群。 |
+| `WallpaperFit` | Windowsの壁紙表示設定(中央/タイル/ストレッチ/フィット/塗りつぶし/スパン)をそれぞれ再現して壁紙画像を画面サイズへ合成する`CompositeWallpaper`。単純な引き伸ばしは「ストレッチ」にしか一致しないため、`ContentMask`の比較基準を実際の表示と正しく合わせるために必要 (§9.2)。Windows非依存の純粋関数群。 |
 | `ParticleGrid` | 背景画像を NxN 粒子に分割 (要件§5)。`ComputeGridDimensionForParticleCount` が希望粒子数から N を逆算。差分ブロックフェーズもこの同じグリッドを`ContentMask`で絞り込んだ部分集合を使う。 |
 | `StateMachine` | `STATE_CONTENT→BACKGROUND→BLACK→FADE→RESET→CONTENT` の純粋な遷移関数 (要件§8)。`STATE_CONTENT`は旧`STATE_ICONS`/`STATE_WINDOWS`を統合したもの(§9参照)。 |
 | `FadeController` | 黒→背景画像のフェード (alpha 0→1、時間ベース)。 |
@@ -70,7 +72,7 @@ flowchart TB
 | `Renderer` | 固定機能OpenGLの描画バッチ関数群 (全画面クアッド・粒子をそれぞれ `glBegin`/`glEnd` 1回で描画、要件§7)。差分ブロック・背景粒子はいずれも同じ`DrawParticlesBatched`を使う。 |
 | `ImageLoader` | Windows Imaging Component (WIC) でBMP/JPEG/PNG/GIFをデコードしGLテクスチャ化。外部画像ライブラリ不要。 |
 | `ScreenCapture` | `BitBlt`で画面を1回読み取り`DecodedImage`化。`AppController`がこれを壁紙画像と差分判定し、差分ブロックのテクスチャとしても使う。読み取り専用。 |
-| `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得(読み取り専用)。パスが空(壁紙が画像ではなく単色背景に設定されている場合、Windowsはエラーではなく空文字列を返す)の場合に備え、`GetSysColor(COLOR_DESKTOP)`で実際の単色背景色を取得する`GetSystemDesktopColor`も提供する。 |
+| `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得(読み取り専用)。パスが空(壁紙が画像ではなく単色背景に設定されている場合、Windowsはエラーではなく空文字列を返す)の場合に備え、`GetSysColor(COLOR_DESKTOP)`で実際の単色背景色を取得する`GetSystemDesktopColor`も提供する。また`HKCU\Control Panel\Desktop`の`WallpaperStyle`/`TileWallpaper`(読み取り専用)から実際の壁紙表示設定を判定する`GetSystemWallpaperFitMode`も提供し、`core::WallpaperFit`に渡す。 |
 | `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。 |
 | `AppPaths` / `WinFileIO` | `%APPDATA%/SpiralSuctionSaver/{config.ini,saver.log}` の解決とワイド文字パスでのファイルI/O (非ASCIIユーザー名対策)。 |
 | `FileLogSink` | `core::Logger` にファイル出力シンクを登録 (1MB超でローテート)。 |
@@ -184,7 +186,9 @@ ctest --test-dir build-tests --output-on-failure
 `MakeParamsForRevolutions`の目標回転数への収束と極小半径時のフォールバック、
 `SuctionCenterWalker` の境界反射、`StateMachine` の全遷移経路、
 `ParticleGrid` の件数・範囲、`ContentMask` の差分判定(同一/差分セルのみ検出/閾値未満は
-無視)とリサンプルの正しさ、`ConfigModel` のini往復変換と不正値フォールバック、
+無視)とリサンプルの正しさ、`WallpaperFit` の各表示スタイル(中央/タイル/ストレッチ/
+フィット/塗りつぶし)の合成結果とレターボックス色、`ConfigModel` のini往復変換と不正値
+フォールバック、
 `GpuTierClassifier` の既知ベンダ文字列分類、`RandomSource` の値域。
 
 ### 8.2 結合テスト
@@ -267,14 +271,23 @@ Win32/OpenGL実装はLinux開発機でコンパイルできないため、GitHub
   プレビュー表示 (`/p`) は意図的に画面キャプチャを行わない設計を維持しているため、
   差分ブロックのフェーズは表示されず背景粒子フェーズから始まって見える。
 
-### 9.2 壁紙合成方式とのズレ
+### 9.2 壁紙合成方式とのズレの修正 (実機フィードバック)
 
-`core::ContentMask`は壁紙画像を`core::ResampleRgba`でニアレストネイバーにより画面サイズへ
-引き伸ばして実画面キャプチャと比較する。これはWindowsの実際の壁紙表示設定(塗りつぶし/
-フィット/中央/タイル等)と完全には一致しない場合があり、ズレが大きいと差分が画面全体に
-出やすくなる(「差分ブロックだらけ」に近い見た目になる)。この場合も機能停止はせず、
-効果が薄まるだけである。`core::ContentMaskConfig`の`pixelDiffThreshold`/
-`cellDifferingFraction`は実機確認後に調整することを前提としたチューニング用の値である。
+当初`core::ContentMask`は壁紙画像を`core::ResampleRgba`でニアレストネイバーにより単純に
+画面サイズへ引き伸ばして(アスペクト比無視)実画面キャプチャと比較していたが、これは
+Windowsの実際の壁紙表示設定のうち「ストレッチ」にしか一致しない。Windows 10/11の既定は
+「塗りつぶし」(アスペクト比を保って画面いっぱいになるよう拡大しクロップ)であり、この
+方式の違いにより広い範囲で誤って差分ありと判定され、「本来透明なはずの箇所に実キャプチャ
+のブロック(≒背景に近い色)が見え隠れする」という実機フィードバックにつながった。
+
+`core::WallpaperFit`(新設)に、Windowsの壁紙表示設定(中央/タイル/ストレッチ/フィット/
+塗りつぶし/スパン)をそれぞれ再現する`CompositeWallpaper`を実装し、
+`platform::GetSystemWallpaperFitMode`(`HKCU\Control Panel\Desktop`の`WallpaperStyle`/
+`TileWallpaper`を読み取り専用で取得)で実際の設定を判定してから比較用の基準画像を
+合成するよう修正した。中央/フィットで生じる余白(レターボックス)は
+`platform::GetSystemDesktopColor`で取得した実際の単色背景色で塗る(Windowsの挙動と一致)。
+スパン(マルチモニタ用)はこのプロジェクトの対象外であるプライマリ画面のみのスコープ
+(§9冒頭)に合わせ、塗りつぶしと同じ扱いにしている。
 
 ### 9.3 単色背景時の「透明化」不具合の修正 (実機フィードバック)
 
@@ -291,8 +304,14 @@ Windowsの仕様で、この場合`AppController`は固定の適当な色 (30,40
 ### 9.4 らせん回転を緩やかにする対応の適用範囲 (実機フィードバック)
 
 当初は差分ブロック(STATE_CONTENT)のみ`MakeParamsForRevolutions`による緩やかな回転
-(3〜5周)に変更し、背景粒子(STATE_BACKGROUND)は既存の`centerAccelFactor`によるVortex
-演出のまま据え置いていたが、「デスクトップ画像が吸い込まれた後の背景画像側も回転が
+(3〜5周)に変更し、背景粒子(STATE_BACKGROUND)は既存の`centerAccelFactor`(既定40)による
+Vortex演出のまま据え置いていたが、「デスクトップ画像が吸い込まれた後の背景画像側も回転が
 速すぎる」との実機フィードバックを受け、背景粒子にも同じ`MakeParamsForRevolutions`に
-よる緩やかな基準回転を適用するよう変更した。中心に近づくほど角速度が増す
-`centerAccelFactor`の上乗せ効果自体は(別の追加要望に基づくものなので)そのまま維持している。
+よる緩やかな基準回転を適用するよう変更した。
+
+その後さらに、「まだ速く感じる」との追加フィードバックを受けて調査したところ、基準の
+dThetaを緩めても、中心付近で`centerAccelFactor`が上乗せする角速度(`kMaxDTheta`=1.2まで
+到達しうる)が非常に大きく、この"仕上げ"部分が全体の速度印象を支配していたことが分かった。
+`kParticleCenterAccelFactor`を40から8まで下げ、この加速が効き始める半径を大幅に縮小した
+(中心付近のごく短い区間だけの演出になるよう調整)。中心に近づくほど角速度が増す効果自体は
+(別の追加要望に基づくものなので)完全には無くさず、弱めて残している。

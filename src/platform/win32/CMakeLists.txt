@@ -76,6 +76,7 @@ target_link_libraries(SpiralSuctionSaver PRIVATE
     comdlg32
     ole32
     windowscodecs
+    advapi32
 )
 
 # A screensaver is an ordinary Win32 GUI executable, just renamed with a

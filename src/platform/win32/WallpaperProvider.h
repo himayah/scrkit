@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <string>
 
+#include "../../core/WallpaperFit.h"
+
 namespace platform {
 
 // Returns the full path to the current desktop wallpaper, or an empty
@@ -23,5 +25,15 @@ std::wstring GetSystemWallpaperPath();
 // core::ContentMask's diff: comparing the real capture against the wrong
 // color would flag the entire plain desktop as "content".
 void GetSystemDesktopColor(uint8_t& r, uint8_t& g, uint8_t& b);
+
+// Returns how Windows is currently positioning/scaling the desktop
+// wallpaper (Settings > Personalization > Background > "壁紙を合わせる"),
+// read from HKCU\Control Panel\Desktop's WallpaperStyle/TileWallpaper
+// values. This only reads the setting; it never changes it. Defaults to
+// Fill (Windows 10/11's own default, and the safest guess if the registry
+// values are missing/unreadable) so core::CompositeWallpaper's diff
+// reference matches what's actually on screen instead of assuming a plain
+// stretch, which only corresponds to one of several possible styles.
+core::WallpaperFitMode GetSystemWallpaperFitMode();
 
 } // namespace platform

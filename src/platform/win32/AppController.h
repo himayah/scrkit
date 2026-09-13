@@ -106,7 +106,12 @@ private:
     // core::SpiralParams::centerAccelFactor for the background particle
     // phase -- makes the image visibly warp into a tighter spiral as it
     // nears the suction center (追加要望: 中心に近づくほど角速度を上げる).
-    static constexpr float kParticleCenterAccelFactor = 40.0f;
+    // Kept much smaller than the original 40 so this near-center flourish
+    // stays a brief finishing touch instead of dominating the whole phase's
+    // perceived speed, now that the base rotation is deliberately gentle
+    // too (追加要望: 背景画像側の回転も緩やかにしてほしい -- with the base
+    // dTheta this small, even a modest acceleration factor took over early).
+    static constexpr float kParticleCenterAccelFactor = 8.0f;
     // Radial shrink rate for content particles (要件.txt §4: r -= 吸い込み速度).
     static constexpr float kContentSuctionSpeed = 2.0f;
     // Every particle (content and background phases alike) completes a
