@@ -273,9 +273,24 @@ void RunFullScreenSaver(HINSTANCE instance) {
     WindowContext ctx;
     ctx.mode = WindowMode::Fullscreen;
 
+    // EXPERIMENTAL (diagnostic): create the window 1px taller than the
+    // display instead of exactly matching it. Everything measured in-
+    // process (capture, window creation, GL init, AppController::
+    // Initialize) consistently completes in well under 200ms per
+    // PerfTimer's logging, yet a ~2s black screen is still visible at
+    // startup -- pointing at something in the OS/GPU-driver/display
+    // presentation path outside application-level timing, most plausibly a
+    // fullscreen-detection heuristic that switches to a different
+    // presentation/flip mode (and briefly blanks the physical display)
+    // specifically because this window's bounds exactly match the
+    // monitor's. The extra row falls off the bottom edge of the monitor
+    // and is never drawn to (the GL viewport below still uses the real
+    // width x height), so this should have no visible effect on its own --
+    // it exists purely to test whether avoiding an exact bounds match
+    // avoids that OS-level transition.
     PerfTimer windowTimer;
     HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kWindowClassName, L"Spiral Suction Saver",
-                                 WS_POPUP | WS_VISIBLE, 0, 0, width, height, nullptr, nullptr,
+                                 WS_POPUP | WS_VISIBLE, 0, 0, width, height + 1, nullptr, nullptr,
                                  instance, nullptr);
     if (!hwnd) {
         core::Logger::Error("RunFullScreenSaver: CreateWindowExW failed");
