@@ -114,20 +114,26 @@ private:
     // core::SpiralParams::centerAccelFactor for the background particle
     // phase -- makes the image visibly warp into a tighter spiral as it
     // nears the suction center (追加要望: 中心に近づくほど角速度を上げる).
-    // Kept much smaller than the original 40 so this near-center flourish
-    // stays a brief finishing touch instead of dominating the whole phase's
-    // perceived speed, now that the base rotation is deliberately gentle
-    // too (追加要望: 背景画像側の回転も緩やかにしてほしい -- with the base
-    // dTheta this small, even a modest acceleration factor took over early).
-    static constexpr float kParticleCenterAccelFactor = 8.0f;
+    // Halved along with kSpiralMinRevolutions/kSpiralMaxRevolutions below
+    // (追加要望: 回転速度をさらに半分程度に) so this near-center flourish
+    // scales down with the rest of the rotation instead of staying fixed.
+    static constexpr float kParticleCenterAccelFactor = 4.0f;
     // Radial shrink rate for content particles (要件.txt §4: r -= 吸い込み速度).
+    // Left unchanged by the revolution-count halving below -- it alone
+    // determines how long a particle takes to reach the center, and that
+    // duration should stay the same while only the rotation slows down
+    // (追加要望: 吸い込まれるまでの時間はそのままに回転速度を半分程度にして
+    // ほしい). See core::MakeParamsForRevolutions: dTheta is derived from
+    // (revolutions, r0, suctionSpeed) so halving revolutions alone halves
+    // the angular speed without changing the frame count to consumption.
     static constexpr float kContentSuctionSpeed = 2.0f;
     // Every particle (content and background phases alike) completes a
     // randomized number of revolutions in this range before reaching the
-    // center (追加要望: らせん回転をもっと緩やかにし、3〜5周回するくらいで
-    // 吸い込む) -- see core::MakeParamsForRevolutions.
-    static constexpr float kSpiralMinRevolutions = 3.0f;
-    static constexpr float kSpiralMaxRevolutions = 5.0f;
+    // center -- see core::MakeParamsForRevolutions. Originally 3-5, then
+    // halved to 1.5-2.5 per further 追加要望 (回転速度をさらに半分程度に,
+    // 吸い込まれるまでの時間は変えない).
+    static constexpr float kSpiralMinRevolutions = 1.5f;
+    static constexpr float kSpiralMaxRevolutions = 2.5f;
 
     void EnsureContentSpiralsInit(core::Vec2 centerPos);
     void EnsureParticleSpiralsInit(core::Vec2 centerPos);
