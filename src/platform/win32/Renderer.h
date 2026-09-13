@@ -37,9 +37,13 @@ void ClearBlack();
 void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHeightPx, float alpha);
 
 // Draws every particle in one glBegin(GL_QUADS)/glEnd batch, sampling from
-// `texture`. `halfSizePx` is the fixed half-width/height of every particle
-// quad (要件.txt §7: 粒子サイズは固定にする). No-op when `texture` is 0 (e.g.
-// no desktop capture was available for the content phase).
-void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfSizePx);
+// `texture`. `halfWidthPx`/`halfHeightPx` are the fixed half-width/height of
+// every particle quad (要件.txt §7: 粒子サイズは固定にする) -- kept separate
+// per axis, not a single square size, so a quad matches its source grid
+// cell's own (generally non-square, screen-aspect-ratio) shape instead of
+// stretching whatever it samples into a square. No-op when `texture` is 0
+// (e.g. no desktop capture was available for the content phase).
+void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfWidthPx,
+                           float halfHeightPx);
 
 } // namespace platform

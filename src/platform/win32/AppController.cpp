@@ -73,9 +73,14 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     // Slightly oversize each particle relative to its grid cell so adjacent
     // particles overlap a hair instead of leaving hairline seams, while
     // still tiling the screen with no large gaps for any particle count.
+    // Kept per-axis (not forced square via max(cellWidth, cellHeight)) since
+    // a grid cell isn't square on a non-square screen -- a square quad would
+    // stretch whatever it samples (user feedback: icons/taskbar text looked
+    // vertically stretched in the content phase).
     const float cellWidth = static_cast<float>(screenWidth_) / static_cast<float>(std::max(1, gridConfig.gridN));
     const float cellHeight = static_cast<float>(screenHeight_) / static_cast<float>(std::max(1, gridConfig.gridN));
-    particleHalfSizePx_ = std::max(cellWidth, cellHeight) * 0.55f;
+    particleHalfWidthPx_ = cellWidth * 0.55f;
+    particleHalfHeightPx_ = cellHeight * 0.55f;
 
     // 3. Real desktop capture + content diff (optional): a still image of
     //    the real screen, diffed cell-by-cell against the wallpaper (same
@@ -291,7 +296,7 @@ void AppController::DrawContentPhase() const {
         const auto& pos = i < contentCurrentPos_.size() ? contentCurrentPos_[i] : core::Vec2{p.x, p.y};
         drawParticles.push_back({pos.x, pos.y, p.u0, p.v0, p.u1, p.v1});
     }
-    DrawParticlesBatched(captureTexture_, drawParticles, particleHalfSizePx_);
+    DrawParticlesBatched(captureTexture_, drawParticles, particleHalfWidthPx_, particleHalfHeightPx_);
 }
 
 void AppController::DrawBackgroundPhase() const {
@@ -304,7 +309,7 @@ void AppController::DrawBackgroundPhase() const {
         const auto& pos = particleCurrentPos_[i];
         drawParticles.push_back({pos.x, pos.y, p.u0, p.v0, p.u1, p.v1});
     }
-    DrawParticlesBatched(backgroundTexture_, drawParticles, particleHalfSizePx_);
+    DrawParticlesBatched(backgroundTexture_, drawParticles, particleHalfWidthPx_, particleHalfHeightPx_);
 }
 
 void AppController::DrawResetPhase() const {
@@ -315,7 +320,7 @@ void AppController::DrawResetPhase() const {
     for (const auto& p : contentParticles_) {
         drawParticles.push_back({p.x, p.y, p.u0, p.v0, p.u1, p.v1}); // original position, at rest
     }
-    DrawParticlesBatched(captureTexture_, drawParticles, particleHalfSizePx_);
+    DrawParticlesBatched(captureTexture_, drawParticles, particleHalfWidthPx_, particleHalfHeightPx_);
 }
 
 void AppController::Draw() const {

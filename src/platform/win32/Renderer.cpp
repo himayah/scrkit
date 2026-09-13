@@ -52,7 +52,8 @@ void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHei
     glDisable(GL_TEXTURE_2D);
 }
 
-void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfSizePx) {
+void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfWidthPx,
+                           float halfHeightPx) {
     if (particles.empty() || texture == 0) return;
 
     glEnable(GL_TEXTURE_2D);
@@ -61,7 +62,7 @@ void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& parti
 
     glBegin(GL_QUADS); // single batch for all particles, however many (要件.txt §7)
     for (const auto& p : particles) {
-        EmitTexturedQuad(p.x - halfSizePx, p.y - halfSizePx, halfSizePx * 2.0f, halfSizePx * 2.0f,
+        EmitTexturedQuad(p.x - halfWidthPx, p.y - halfHeightPx, halfWidthPx * 2.0f, halfHeightPx * 2.0f,
                           p.u0, p.v0, p.u1, p.v1);
     }
     glEnd();

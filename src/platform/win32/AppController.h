@@ -84,15 +84,23 @@ private:
     std::vector<core::SpiralParams> contentSpiralParams_;
     std::vector<core::SpiralParams> particleSpiralParams_;
 
-    // Half-width/height of every particle quad in pixels. Computed once in
+    // Half-width/height of every particle quad in pixels, computed once in
     // Initialize() from the grid cell size (screen size / gridN) so
     // particles tile the screen with no visible gaps regardless of the
     // configured particle count, then used unchanged for every particle for
     // the rest of the run -- still "fixed" per 要件.txt §7 (it never varies
     // per-particle or per-frame), just resolution/config-dependent rather
     // than a hardcoded literal. Shared by the content and background
-    // phases, since both draw from the same grid.
-    float particleHalfSizePx_ = 4.0f;
+    // phases, since both draw from the same grid. Tracked separately per
+    // axis (not a single square half-size) because a grid cell itself isn't
+    // square on a non-square screen (e.g. 1920x1080 with a square NxN grid
+    // gives cells ~1.78x wider than tall) -- forcing a square quad stretched
+    // whatever was sampled into it, most visibly as taskbar clock text and
+    // icons looking vertically stretched in the content phase (user
+    // feedback; the same distortion was silently present in the background
+    // phase's wallpaper shatter too, just less noticeable there).
+    float particleHalfWidthPx_ = 4.0f;
+    float particleHalfHeightPx_ = 4.0f;
 
     bool contentInitialized_ = false;
     bool particlesInitialized_ = false;
