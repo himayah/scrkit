@@ -1,7 +1,6 @@
 #include "SaverWindow.h"
 
 #include <algorithm>
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -136,34 +135,38 @@ std::wstring ResolveWallpaperPath(const core::ConfigModel& config) {
 // preview parent going away). `desktopCapture`, when non-null, must have
 // been captured against exactly this same width x height (only meaningful
 // for the real fullscreen size -- callers never pass it for the scaled-down
-// preview). `onReadyToShow`, when set, is called once right after the very
-// first frame has been rendered (before entering the main loop) -- callers
-// that create `hwnd` still hidden at this point (see RunFullScreenSaver)
-// use it to reveal the window only once there's an actual rendered frame to
-// show, instead of a blank/black window while Initialize() was still busy
-// decoding images and computing the content diff (user feedback: a black
-// flash was visible for a moment at startup).
+// preview).
 void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
-                    const DecodedImage* desktopCapture = nullptr,
-                    const std::function<void()>& onReadyToShow = nullptr) {
+                    const DecodedImage* desktopCapture = nullptr) {
+    SetupOrthoProjection2D(width, height);
+
+    // Show the just-captured real desktop immediately, before doing any of
+    // the slower work below (wallpaper decode, content diff, texture
+    // uploads) -- otherwise the window sits there undrawn (black) for
+    // however long that takes (user feedback: ~2s of black screen at
+    // startup). This is just a plain full-screen quad of the capture
+    // itself, so it looks identical to the real desktop it's covering;
+    // AppController::Initialize below reuses the very same capture for the
+    // real content-phase textures, so the transition into the actual
+    // animation is seamless once it's ready.
+    GLuint previewTexture = desktopCapture ? CreateTextureFromImage(*desktopCapture) : 0;
+    if (previewTexture != 0) {
+        DrawFullscreenTexturedQuad(previewTexture, width, height, 1.0f);
+        gl.SwapBuffers();
+    }
+
     core::ConfigModel config = LoadConfigOrDefault();
     std::wstring wallpaper = ResolveWallpaperPath(config);
 
-    SetupOrthoProjection2D(width, height);
-
     AppController app;
-    if (!app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture)) {
+    const bool initialized = app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture);
+    if (previewTexture != 0) {
+        glDeleteTextures(1, &previewTexture);
+    }
+    if (!initialized) {
         core::Logger::Error("SaverWindow: AppController::Initialize failed");
         return;
     }
-
-    // Render once before revealing the window, so whatever the caller does
-    // in `onReadyToShow` (e.g. ShowWindow) uncovers an already-drawn frame
-    // rather than a blank one.
-    app.Update(0.0f);
-    app.Draw();
-    gl.SwapBuffers();
-    if (onReadyToShow) onReadyToShow();
 
     LARGE_INTEGER freq{};
     LARGE_INTEGER prevTime{};
@@ -235,40 +238,30 @@ void RunFullScreenSaver(HINSTANCE instance) {
     WindowContext ctx;
     ctx.mode = WindowMode::Fullscreen;
 
-    // Created hidden (no WS_VISIBLE): the real desktop stays showing
-    // normally underneath until RunMessageLoop has an actual first frame
-    // ready to reveal it with (see the onReadyToShow callback below) --
-    // otherwise this WS_POPUP|WS_EX_TOPMOST window would immediately cover
-    // the whole screen with nothing drawn yet.
-    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kWindowClassName, L"Spiral Suction Saver", WS_POPUP, 0, 0,
-                                 width, height, nullptr, nullptr, instance, nullptr);
+    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kWindowClassName, L"Spiral Suction Saver",
+                                 WS_POPUP | WS_VISIBLE, 0, 0, width, height, nullptr, nullptr,
+                                 instance, nullptr);
     if (!hwnd) {
         core::Logger::Error("RunFullScreenSaver: CreateWindowExW failed");
         return;
     }
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&ctx));
 
-    bool cursorHidden = false;
+    ShowCursor(FALSE);
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
+
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr, [&] {
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            SetFocus(hwnd);
-            ShowCursor(FALSE);
-            cursorHidden = true;
-        });
+        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr);
         gl.Destroy();
     } else {
-        // Nothing else will reveal the window on this path -- show it now
-        // so the error dialog has its usual fullscreen backdrop.
-        ShowWindow(hwnd, SW_SHOW);
         core::Logger::Error("RunFullScreenSaver: OpenGL context creation failed");
         MessageBoxW(hwnd, L"Failed to initialize OpenGL. The screensaver cannot run.",
                     L"Spiral Suction Saver", MB_OK | MB_ICONERROR);
     }
 
-    if (cursorHidden) ShowCursor(TRUE);
+    ShowCursor(TRUE);
     if (IsWindow(hwnd)) {
         DestroyWindow(hwnd);
     }
