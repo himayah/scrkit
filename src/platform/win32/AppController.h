@@ -72,15 +72,17 @@ private:
 
     std::vector<core::SpiralState> contentSpirals_;
     std::vector<core::Vec2> contentCurrentPos_;
-    // Per-particle spiral params (unlike particleSpirals_ below, which all
-    // share one core::SpiralParams per frame): each content particle gets
+    std::vector<core::SpiralState> particleSpirals_;
+    std::vector<core::Vec2> particleCurrentPos_;
+    // Per-particle spiral params for both phases above: each particle gets
     // its own dTheta, derived from its own starting radius so it completes
     // roughly the same number of revolutions regardless of how far it
     // happens to start from the (randomly wandering) suction center -- see
-    // core::MakeParamsForRevolutions.
+    // core::MakeParamsForRevolutions. (particleSpiralParams_ additionally
+    // has kParticleCenterAccelFactor layered on top of that, for the
+    // separately-requested near-center vortex tightening.)
     std::vector<core::SpiralParams> contentSpiralParams_;
-    std::vector<core::SpiralState> particleSpirals_;
-    std::vector<core::Vec2> particleCurrentPos_;
+    std::vector<core::SpiralParams> particleSpiralParams_;
 
     // Half-width/height of every particle quad in pixels. Computed once in
     // Initialize() from the grid cell size (screen size / gridN) so
@@ -107,11 +109,12 @@ private:
     static constexpr float kParticleCenterAccelFactor = 40.0f;
     // Radial shrink rate for content particles (要件.txt §4: r -= 吸い込み速度).
     static constexpr float kContentSuctionSpeed = 2.0f;
-    // Content particles complete a randomized number of revolutions in this
-    // range before reaching the center (追加要望: らせん回転をもっと緩やかに
-    // し、3〜5周回するくらいで吸い込む) -- see core::MakeParamsForRevolutions.
-    static constexpr float kContentMinRevolutions = 3.0f;
-    static constexpr float kContentMaxRevolutions = 5.0f;
+    // Every particle (content and background phases alike) completes a
+    // randomized number of revolutions in this range before reaching the
+    // center (追加要望: らせん回転をもっと緩やかにし、3〜5周回するくらいで
+    // 吸い込む) -- see core::MakeParamsForRevolutions.
+    static constexpr float kSpiralMinRevolutions = 3.0f;
+    static constexpr float kSpiralMaxRevolutions = 5.0f;
 
     void EnsureContentSpiralsInit(core::Vec2 centerPos);
     void EnsureParticleSpiralsInit(core::Vec2 centerPos);

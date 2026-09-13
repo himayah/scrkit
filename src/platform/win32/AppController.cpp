@@ -7,6 +7,7 @@
 #include "../../core/Logger.h"
 #include "OpenGLContext.h"
 #include "Renderer.h"
+#include "WallpaperProvider.h"
 
 namespace platform {
 
@@ -27,13 +28,22 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     screenHeight_ = screenHeightPx;
 
     // 1. Background image (falls back to a flat color rather than failing --
-    //    design doc: エラーハンドリング方針).
+    //    design doc: エラーハンドリング方針). When there's no wallpaper *file*
+    //    to decode -- notably, Windows reports an empty path here (not a
+    //    decode failure) when the user has chosen a plain solid-color
+    //    background instead of a picture -- fall back to that real desktop
+    //    color rather than an arbitrary placeholder, so both the rendered
+    //    background and the content diff below actually match what's really
+    //    on screen (user feedback: a visibly-wrong flat placeholder color was
+    //    showing through wherever content particles had been sucked away).
     DecodedImage image;
     if (wallpaperPath.empty() || !DecodeImageFile(wallpaperPath, image)) {
         if (!wallpaperPath.empty()) {
             core::Logger::Warn("AppController: falling back to placeholder background image");
         }
-        image = MakeFallbackImage(30, 40, 60);
+        uint8_t r = 30, g = 40, b = 60;
+        GetSystemDesktopColor(r, g, b);
+        image = MakeFallbackImage(r, g, b);
     }
     backgroundTexture_ = CreateTextureFromImage(image);
     if (backgroundTexture_ == 0) {
@@ -142,7 +152,7 @@ void AppController::EnsureContentSpiralsInit(core::Vec2 centerPos) {
         // 追加要望: らせん回転をもっと緩やかにし、3〜5周回するくらいで中心に
         // 消えるようにする -- 個体差として範囲内でランダム化する。
         const float targetRevolutions =
-            kContentMinRevolutions + rng_->NextFloat01() * (kContentMaxRevolutions - kContentMinRevolutions);
+            kSpiralMinRevolutions + rng_->NextFloat01() * (kSpiralMaxRevolutions - kSpiralMinRevolutions);
         contentSpiralParams_[i] =
             core::MakeParamsForRevolutions(contentSpirals_[i].r, kContentSuctionSpeed, targetRevolutions);
     }
@@ -153,9 +163,22 @@ void AppController::EnsureParticleSpiralsInit(core::Vec2 centerPos) {
     if (particlesInitialized_) return;
     particleSpirals_.resize(particles_.size());
     particleCurrentPos_.resize(particles_.size());
+    particleSpiralParams_.resize(particles_.size());
+    // 要件.txt §7: 粒子が多いときは軽量な吸い込み速度を使う。
+    const float suctionSpeed = resolvedParticleCount_ > kLightweightParticleThreshold
+                                    ? core::LightweightSpiralParams().suctionSpeed
+                                    : core::NormalSpiralParams().suctionSpeed;
     for (size_t i = 0; i < particles_.size(); ++i) {
         particleSpirals_[i] = core::MakeSpiralState(particles_[i].x, particles_[i].y, centerPos.x, centerPos.y);
         particleCurrentPos_[i] = {particles_[i].x, particles_[i].y};
+        // 追加要望: 背景画像側のらせん回転ももっと緩やかに、3〜5周回するくらい
+        // にする -- content側と同じ考え方で個体差をランダム化する。
+        const float targetRevolutions =
+            kSpiralMinRevolutions + rng_->NextFloat01() * (kSpiralMaxRevolutions - kSpiralMinRevolutions);
+        particleSpiralParams_[i] = core::MakeParamsForRevolutions(particleSpirals_[i].r, suctionSpeed, targetRevolutions);
+        // 追加要望: 背景画像が吸い込まれるとき、中心に近づくほど角速度を上げて
+        // らせん状に歪める(この効果は維持する)。
+        particleSpiralParams_[i].centerAccelFactor = kParticleCenterAccelFactor;
     }
     particlesInitialized_ = true;
 }
@@ -170,16 +193,10 @@ void AppController::StepContentSpirals(core::Vec2 centerPos) {
 }
 
 void AppController::StepParticleSpirals(core::Vec2 centerPos) {
-    // 要件.txt §7: 粒子が多いときは軽量なパラメータでらせん計算する。
-    auto params = resolvedParticleCount_ > kLightweightParticleThreshold
-                       ? core::LightweightSpiralParams()
-                       : core::NormalSpiralParams();
-    // 追加要望: 背景画像が吸い込まれるとき、中心に近づくほど角速度を上げて
-    // らせん状に歪める。
-    params.centerAccelFactor = kParticleCenterAccelFactor;
     for (size_t i = 0; i < particleSpirals_.size(); ++i) {
         if (particleSpirals_[i].alive) {
-            particleCurrentPos_[i] = core::StepSpiral(particleSpirals_[i], params, centerPos.x, centerPos.y);
+            particleCurrentPos_[i] =
+                core::StepSpiral(particleSpirals_[i], particleSpiralParams_[i], centerPos.x, centerPos.y);
         }
     }
 }
