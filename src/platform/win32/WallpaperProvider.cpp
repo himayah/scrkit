@@ -4,8 +4,6 @@
 
 #include <windows.h>
 
-#include "../../core/Logger.h"
-
 namespace platform {
 
 std::wstring GetSystemWallpaperPath() {
@@ -51,14 +49,6 @@ core::WallpaperFitMode GetSystemWallpaperFitMode() {
         case 10:
         default: mode = core::WallpaperFitMode::Fill; break;
     }
-    // Diagnostic (temporary -- chasing the compositedWallpaper-too-dark bug,
-    // see docs/TODO / spiral-saver-open-work memory): confirms the raw
-    // registry values actually read on the real machine and which mode they
-    // resolved to, so a misread WallpaperStyle/TileWallpaper can be ruled
-    // in/out directly instead of guessing from the composited result alone.
-    core::Logger::Info("GetSystemWallpaperFitMode: WallpaperStyle=\"" + std::to_string(style) +
-                        "\" TileWallpaper=\"" + std::to_string(_wtoi(tileBuf)) +
-                        "\" -> mode=" + std::to_string(static_cast<int>(mode)));
     return mode;
 }
 

@@ -7,10 +7,8 @@
 #include "../../core/ContentMask.h"
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
-#include "AppPaths.h"
 #include "OpenGLContext.h"
 #include "Renderer.h"
-#include "ScreenCapture.h"
 #include "WallpaperProvider.h"
 
 namespace platform {
@@ -19,125 +17,6 @@ namespace {
 
 bool AllDead(const std::vector<core::SpiralState>& states) {
     return std::all_of(states.begin(), states.end(), [](const core::SpiralState& s) { return !s.alive; });
-}
-
-// Diagnostic helper (temporary -- chasing the compositedWallpaper-too-dark
-// bug, see docs/TODO / spiral-saver-open-work memory): sparse-sampled
-// average brightness, same technique as the earlier startup-blackout
-// diagnostics (see history around 8579506/a539536), reused here to compare
-// the *raw decoded* wallpaper image against the *composited* reference and
-// the real capture, so a decode-time darkening can be told apart from a
-// compositing/scale-math bug instead of guessing from one combined number.
-int SampledAvgBrightness(const uint8_t* rgba, size_t pixelCount) {
-    if (pixelCount == 0) return 0;
-    unsigned long long sum = 0;
-    size_t sampled = 0;
-    for (size_t i = 0; i < pixelCount; i += 97, ++sampled) {
-        const uint8_t* p = rgba + i * 4;
-        sum += p[0] + p[1] + p[2];
-    }
-    return sampled == 0 ? 0 : static_cast<int>(sum / (sampled * 3));
-}
-
-// Diagnostic helper (temporary, see SaveDebugImages below): writes `image`
-// as an uncompressed 24-bit BMP -- no WIC encoder round-trip needed, and
-// viewable with literally anything (Paint, Photos, a browser tab).
-bool SaveDebugBmp(const std::wstring& path, const DecodedImage& image) {
-    if (image.width <= 0 || image.height <= 0) return false;
-    const int width = image.width;
-    const int height = image.height;
-    const int rowSize = ((width * 3 + 3) / 4) * 4; // rows padded to a 4-byte boundary
-    const DWORD pixelDataSize = static_cast<DWORD>(rowSize) * static_cast<DWORD>(height);
-
-    BITMAPFILEHEADER fileHeader{};
-    fileHeader.bfType = 0x4D42; // 'BM'
-    fileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-    fileHeader.bfSize = fileHeader.bfOffBits + pixelDataSize;
-
-    BITMAPINFOHEADER infoHeader{};
-    infoHeader.biSize = sizeof(BITMAPINFOHEADER);
-    infoHeader.biWidth = width;
-    infoHeader.biHeight = -height; // negative = top-down, matches our RGBA row order
-    infoHeader.biPlanes = 1;
-    infoHeader.biBitCount = 24;
-    infoHeader.biCompression = BI_RGB;
-    infoHeader.biSizeImage = pixelDataSize;
-
-    std::vector<uint8_t> pixelData(pixelDataSize, 0);
-    for (int y = 0; y < height; ++y) {
-        const uint8_t* srcRow = image.rgba.data() + static_cast<size_t>(y) * width * 4;
-        uint8_t* dstRow = pixelData.data() + static_cast<size_t>(y) * rowSize;
-        for (int x = 0; x < width; ++x) {
-            dstRow[x * 3 + 0] = srcRow[x * 4 + 2]; // B
-            dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
-            dstRow[x * 3 + 2] = srcRow[x * 4 + 0]; // R
-        }
-    }
-
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
-    DWORD written = 0;
-    bool ok = WriteFile(file, &fileHeader, sizeof(fileHeader), &written, nullptr) && written == sizeof(fileHeader);
-    if (ok) {
-        ok = WriteFile(file, &infoHeader, sizeof(infoHeader), &written, nullptr) && written == sizeof(infoHeader);
-    }
-    if (ok) {
-        ok = WriteFile(file, pixelData.data(), static_cast<DWORD>(pixelData.size()), &written, nullptr) &&
-             written == pixelData.size();
-    }
-    CloseHandle(file);
-    return ok;
-}
-
-// Diagnostic (temporary -- chasing the compositedWallpaper-too-dark bug, see
-// docs/TODO / spiral-saver-open-work memory): the brightness-gain correction
-// in core::ComputeContentMask brought the *average* sampled brightness of
-// the capture and compositedWallpaper very close together on the real
-// machine, yet ~92% of cells were still flagged as content -- meaning large
-// per-pixel differences remain even where the overall averages now match.
-// That could be a non-uniform (non-linear) tone curve that a single flat
-// gain can't correct, or it could mean the two images don't actually
-// correspond to the same picture/crop at all. Saving both side by side lets
-// that be seen directly instead of guessing from summary numbers alone.
-//
-// Saved at full screen resolution, NOT downscaled: an earlier version of
-// this function capped the output at 1280px on the long edge for easier
-// viewing, but that downscale (via core::ResampleRgba's nearest-neighbor
-// sampling) measurably smooths over exactly the fine per-pixel texture
-// noise this diagnostic exists to quantify -- a from-the-images fraction-
-// flagged calculation came out at 18.9% while the real run's own log line
-// (computed by core::ComputeContentMask on the actual full-resolution
-// buffers) said 46.5% for the very same frame. Any offline pixel analysis
-// of these files needs to match what the real algorithm actually sees.
-void SaveDebugImages(int screenWidth, int screenHeight, const DecodedImage& capture,
-                      const DecodedImage& wallpaper) {
-    const std::wstring dir = GetAppDataDirectory();
-    if (dir.empty()) {
-        core::Logger::Warn("SaveDebugImages: could not resolve %APPDATA%/SpiralSuctionSaver");
-        return;
-    }
-
-    const int outW = screenWidth;
-    const int outH = screenHeight;
-
-    DecodedImage smallCapture;
-    smallCapture.width = outW;
-    smallCapture.height = outH;
-    smallCapture.rgba.assign(static_cast<size_t>(outW) * outH * 4, 0);
-    core::ResampleRgba(capture.rgba.data(), capture.width, capture.height, smallCapture.rgba.data(), outW, outH);
-
-    DecodedImage smallWallpaper;
-    smallWallpaper.width = outW;
-    smallWallpaper.height = outH;
-    smallWallpaper.rgba.assign(static_cast<size_t>(outW) * outH * 4, 0);
-    core::ResampleRgba(wallpaper.rgba.data(), wallpaper.width, wallpaper.height, smallWallpaper.rgba.data(), outW,
-                        outH);
-
-    const bool capOk = SaveDebugBmp(dir + L"\\debug_capture.bmp", smallCapture);
-    const bool wpOk = SaveDebugBmp(dir + L"\\debug_wallpaper.bmp", smallWallpaper);
-    core::Logger::Info("SaveDebugImages: wrote debug_capture.bmp=" + std::string(capOk ? "ok" : "FAILED") +
-                        ", debug_wallpaper.bmp=" + std::string(wpOk ? "ok" : "FAILED") + " (" +
-                        std::to_string(outW) + "x" + std::to_string(outH) + ") to %APPDATA%/SpiralSuctionSaver");
 }
 
 } // namespace
@@ -171,14 +50,6 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         }
         image = MakeFallbackImage(desktopR, desktopG, desktopB);
     }
-    // Diagnostic (temporary, see SampledAvgBrightness above): the raw
-    // decoded wallpaper's own brightness, before any compositing math runs
-    // on it -- isolates a WIC decode-time darkening (e.g. an embedded color
-    // profile or gamma mismatch) from a bug in CompositeWallpaper itself.
-    core::Logger::Info(
-        "AppController: decoded wallpaper " + std::to_string(image.width) + "x" + std::to_string(image.height) +
-        ", sampled avg brightness=" + std::to_string(SampledAvgBrightness(image.rgba.data(), image.rgba.size() / 4)) +
-        " (/255)");
 
     // Composite the wallpaper the same way Windows actually positions/
     // scales it (Fill/Fit/Stretch/Center/Tile) *before* building the visible
@@ -268,32 +139,6 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             core::Logger::Info("AppController: " + std::to_string(contentParticles_.size()) + "/" +
                                 std::to_string(particles_.size()) +
                                 " grid cell(s) flagged as real desktop content");
-            // Diagnostic (temporary, see SampledAvgBrightness above): compares
-            // the real capture against the *composited* wallpaper reference --
-            // if this gap is as large as the decoded-image-vs-capture gap
-            // logged above, the darkening happens in CompositeWallpaper's
-            // scale/crop math (or the fit mode it was given); if it's much
-            // smaller, the decode step itself is where the image went dark.
-            const size_t pixelCount = compositedWallpaper.rgba.size() / 4;
-            core::Logger::Info(
-                "AppController::Initialize: sampled avg brightness -- capture=" +
-                std::to_string(SampledAvgBrightness(desktopCapture->rgba.data(), pixelCount)) +
-                ", compositedWallpaper=" +
-                std::to_string(SampledAvgBrightness(compositedWallpaper.rgba.data(), pixelCount)) + " (/255)");
-            // Diagnostic (temporary, see ScreenCapture.h): if the capture is
-            // far brighter than both the decoded wallpaper and the composited
-            // reference above, while advancedColorEnabled below comes back
-            // true, that confirms Windows is tone-mapping the SDR desktop
-            // brighter for an HDR display -- something a plain file decode
-            // can never reproduce -- rather than a bug in this code's own
-            // decode or compositing math.
-            LogDisplayColorInfo();
-            // Diagnostic (temporary, see SaveDebugImages above): a visual
-            // side-by-side of what's actually being diffed, to see directly
-            // whether the remaining mismatch (after brightness-gain
-            // correction) is a tone-curve shape difference or something more
-            // structural (wrong crop/image entirely).
-            SaveDebugImages(screenWidth_, screenHeight_, *desktopCapture, compositedWallpaper);
         } else {
             core::Logger::Warn("AppController: failed to create desktop capture texture; content phase will be skipped");
         }

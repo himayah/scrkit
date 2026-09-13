@@ -20,15 +20,4 @@ namespace platform {
 // Returns false (leaving `out` untouched) on any GDI failure.
 bool CaptureScreenToImage(int width, int height, DecodedImage& out);
 
-// Diagnostic (temporary -- chasing the compositedWallpaper-too-dark bug, see
-// docs/TODO / spiral-saver-open-work memory): logs each active display path's
-// HDR/"Advanced color" state via the documented DISPLAYCONFIG_* read-only
-// query API (never changes anything). A real-machine log showed the actual
-// on-screen capture nearly twice as bright as the wallpaper file decoded
-// straight off disk, with CompositeWallpaper's own math accounting for none
-// of that gap -- exactly the symptom of Windows tone-mapping SDR desktop
-// content brighter when "HDR" / advanced color is enabled for the display,
-// which a plain file decode has no way to know about.
-void LogDisplayColorInfo();
-
 } // namespace platform

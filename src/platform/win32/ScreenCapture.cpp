@@ -6,43 +6,6 @@
 
 namespace platform {
 
-void LogDisplayColorInfo() {
-    UINT32 numPaths = 0, numModes = 0;
-    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &numPaths, &numModes) != ERROR_SUCCESS ||
-        numPaths == 0) {
-        core::Logger::Warn("LogDisplayColorInfo: GetDisplayConfigBufferSizes failed");
-        return;
-    }
-
-    std::vector<DISPLAYCONFIG_PATH_INFO> paths(numPaths);
-    std::vector<DISPLAYCONFIG_MODE_INFO> modes(numModes);
-    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &numPaths, paths.data(), &numModes, modes.data(), nullptr) !=
-        ERROR_SUCCESS) {
-        core::Logger::Warn("LogDisplayColorInfo: QueryDisplayConfig failed");
-        return;
-    }
-
-    for (UINT32 i = 0; i < numPaths; ++i) {
-        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO colorInfo{};
-        colorInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
-        colorInfo.header.size = sizeof(colorInfo);
-        colorInfo.header.adapterId = paths[i].targetInfo.adapterId;
-        colorInfo.header.id = paths[i].targetInfo.id;
-        if (DisplayConfigGetDeviceInfo(&colorInfo.header) == ERROR_SUCCESS) {
-            core::Logger::Info(
-                "LogDisplayColorInfo: path " + std::to_string(i) + " advancedColorSupported=" +
-                std::to_string(colorInfo.advancedColorSupported) +
-                " advancedColorEnabled=" + std::to_string(colorInfo.advancedColorEnabled) +
-                " wideColorEnforced=" + std::to_string(colorInfo.wideColorEnforced) +
-                " advancedColorForceDisabled=" + std::to_string(colorInfo.advancedColorForceDisabled) +
-                " bitsPerColorChannel=" + std::to_string(colorInfo.bitsPerColorChannel));
-        } else {
-            core::Logger::Warn("LogDisplayColorInfo: DisplayConfigGetDeviceInfo failed for path " +
-                                std::to_string(i));
-        }
-    }
-}
-
 bool CaptureScreenToImage(int width, int height, DecodedImage& out) {
     if (width <= 0 || height <= 0) {
         return false;
