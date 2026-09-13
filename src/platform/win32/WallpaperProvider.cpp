@@ -4,6 +4,8 @@
 
 #include <windows.h>
 
+#include "../../core/Logger.h"
+
 namespace platform {
 
 std::wstring GetSystemWallpaperPath() {
@@ -40,14 +42,24 @@ core::WallpaperFitMode GetSystemWallpaperFitMode() {
 
     const int style = _wtoi(styleBuf);
     const bool tile = _wtoi(tileBuf) != 0;
+    core::WallpaperFitMode mode;
     switch (style) {
-        case 0: return tile ? core::WallpaperFitMode::Tile : core::WallpaperFitMode::Center;
-        case 2: return core::WallpaperFitMode::Stretch;
-        case 6: return core::WallpaperFitMode::Fit;
-        case 22: return core::WallpaperFitMode::Span;
+        case 0: mode = tile ? core::WallpaperFitMode::Tile : core::WallpaperFitMode::Center; break;
+        case 2: mode = core::WallpaperFitMode::Stretch; break;
+        case 6: mode = core::WallpaperFitMode::Fit; break;
+        case 22: mode = core::WallpaperFitMode::Span; break;
         case 10:
-        default: return core::WallpaperFitMode::Fill;
+        default: mode = core::WallpaperFitMode::Fill; break;
     }
+    // Diagnostic (temporary -- chasing the compositedWallpaper-too-dark bug,
+    // see docs/TODO / spiral-saver-open-work memory): confirms the raw
+    // registry values actually read on the real machine and which mode they
+    // resolved to, so a misread WallpaperStyle/TileWallpaper can be ruled
+    // in/out directly instead of guessing from the composited result alone.
+    core::Logger::Info("GetSystemWallpaperFitMode: WallpaperStyle=\"" + std::to_string(style) +
+                        "\" TileWallpaper=\"" + std::to_string(_wtoi(tileBuf)) +
+                        "\" -> mode=" + std::to_string(static_cast<int>(mode)));
+    return mode;
 }
 
 } // namespace platform

@@ -18,6 +18,24 @@ bool AllDead(const std::vector<core::SpiralState>& states) {
     return std::all_of(states.begin(), states.end(), [](const core::SpiralState& s) { return !s.alive; });
 }
 
+// Diagnostic helper (temporary -- chasing the compositedWallpaper-too-dark
+// bug, see docs/TODO / spiral-saver-open-work memory): sparse-sampled
+// average brightness, same technique as the earlier startup-blackout
+// diagnostics (see history around 8579506/a539536), reused here to compare
+// the *raw decoded* wallpaper image against the *composited* reference and
+// the real capture, so a decode-time darkening can be told apart from a
+// compositing/scale-math bug instead of guessing from one combined number.
+int SampledAvgBrightness(const uint8_t* rgba, size_t pixelCount) {
+    if (pixelCount == 0) return 0;
+    unsigned long long sum = 0;
+    size_t sampled = 0;
+    for (size_t i = 0; i < pixelCount; i += 97, ++sampled) {
+        const uint8_t* p = rgba + i * 4;
+        sum += p[0] + p[1] + p[2];
+    }
+    return sampled == 0 ? 0 : static_cast<int>(sum / (sampled * 3));
+}
+
 } // namespace
 
 AppController::~AppController() { Shutdown(); }
@@ -49,6 +67,14 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         }
         image = MakeFallbackImage(desktopR, desktopG, desktopB);
     }
+    // Diagnostic (temporary, see SampledAvgBrightness above): the raw
+    // decoded wallpaper's own brightness, before any compositing math runs
+    // on it -- isolates a WIC decode-time darkening (e.g. an embedded color
+    // profile or gamma mismatch) from a bug in CompositeWallpaper itself.
+    core::Logger::Info(
+        "AppController: decoded wallpaper " + std::to_string(image.width) + "x" + std::to_string(image.height) +
+        ", sampled avg brightness=" + std::to_string(SampledAvgBrightness(image.rgba.data(), image.rgba.size() / 4)) +
+        " (/255)");
     backgroundTexture_ = CreateTextureFromImage(image);
     if (backgroundTexture_ == 0) {
         core::Logger::Error("AppController: failed to create background texture");
@@ -124,6 +150,18 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             core::Logger::Info("AppController: " + std::to_string(contentParticles_.size()) + "/" +
                                 std::to_string(particles_.size()) +
                                 " grid cell(s) flagged as real desktop content");
+            // Diagnostic (temporary, see SampledAvgBrightness above): compares
+            // the real capture against the *composited* wallpaper reference --
+            // if this gap is as large as the decoded-image-vs-capture gap
+            // logged above, the darkening happens in CompositeWallpaper's
+            // scale/crop math (or the fit mode it was given); if it's much
+            // smaller, the decode step itself is where the image went dark.
+            const size_t pixelCount = compositedWallpaper.rgba.size() / 4;
+            core::Logger::Info(
+                "AppController::Initialize: sampled avg brightness -- capture=" +
+                std::to_string(SampledAvgBrightness(desktopCapture->rgba.data(), pixelCount)) +
+                ", compositedWallpaper=" +
+                std::to_string(SampledAvgBrightness(compositedWallpaper.rgba.data(), pixelCount)) + " (/255)");
         } else {
             core::Logger::Warn("AppController: failed to create desktop capture texture; content phase will be skipped");
         }
