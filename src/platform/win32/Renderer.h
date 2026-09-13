@@ -70,10 +70,27 @@ void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHei
 // one fixed solid color (要件.txt §7: 固定色) as before.
 void DrawIconBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& icons);
 
-// Draws every window's client area, then every window's title bar, each as
-// its own single batch. Same captureTexture fallback rule as above.
-void DrawWindowBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& clientAreas,
-                              const std::vector<DrawCapturedRect>& titleBars);
+// One window's client area + title bar, plus which texture to draw them
+// with. `ownTexture` non-zero means this window has its own individual
+// PrintWindow capture (see RealDesktopQuery) covering exactly this window's
+// rect -- `client`/`title`'s UV coordinates are into that texture, not the
+// shared one, and it is drawn in its own single draw call, independent of
+// every other window (so it shows its own true content even where another
+// window currently overlaps it on the real screen). `ownTexture == 0` means
+// draw it batched together with every other such window, sampling the
+// shared fallback texture passed to DrawWindowBodiesBatched (or a solid
+// color, if that's 0 too).
+struct DrawWindowRect {
+    DrawCapturedRect client;
+    DrawCapturedRect title;
+    GLuint ownTexture = 0;
+};
+
+// Draws every window's client area, then every window's title bar. Windows
+// with their own capture texture (`ownTexture != 0`) are each drawn in
+// their own single batch; the rest are drawn together in one shared batch
+// per part, sampling `sharedTexture` (see DrawWindowRect above).
+void DrawWindowBodiesBatched(GLuint sharedTexture, const std::vector<DrawWindowRect>& windows);
 
 // Draws every particle in one glBegin(GL_QUADS)/glEnd batch, sampling from
 // `texture`. `halfSizePx` is the fixed half-width/height of every particle

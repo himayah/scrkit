@@ -118,14 +118,37 @@ void DrawIconBodiesBatched(GLuint captureTexture, const std::vector<DrawCaptured
     DrawCapturedOrSolidBatch(captureTexture, icons, color);
 }
 
-void DrawWindowBodiesBatched(GLuint captureTexture, const std::vector<DrawCapturedRect>& clientAreas,
-                              const std::vector<DrawCapturedRect>& titleBars) {
+void DrawWindowBodiesBatched(GLuint sharedTexture, const std::vector<DrawWindowRect>& windows) {
     const float bodyColor[4] = {kWindowBodyColor[0], kWindowBodyColor[1], kWindowBodyColor[2],
                                  kWindowBodyColor[3]};
     const float titleColor[4] = {kWindowTitleBarColor[0], kWindowTitleBarColor[1], kWindowTitleBarColor[2],
                                   1.0f};
-    DrawCapturedOrSolidBatch(captureTexture, clientAreas, bodyColor);
-    DrawCapturedOrSolidBatch(captureTexture, titleBars, titleColor);
+
+    std::vector<DrawCapturedRect> sharedClientAreas, sharedTitleBars;
+    for (const auto& win : windows) {
+        if (win.ownTexture == 0) {
+            sharedClientAreas.push_back(win.client);
+            sharedTitleBars.push_back(win.title);
+            continue;
+        }
+        // Own capture: one bind, one batch of both its quads (要件.txt §7's
+        // "one glBegin per type" concerns particle counts, not this -- at
+        // most kMaxWindows of these, each already its own PrintWindow call).
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, win.ownTexture);
+        glBegin(GL_QUADS);
+        glColor4f(1.0f, 1.0f, 1.0f, titleColor[3]);
+        EmitTexturedQuad(win.title.rect.x, win.title.rect.y, win.title.rect.w, win.title.rect.h,
+                          win.title.u0, win.title.v0, win.title.u1, win.title.v1);
+        glColor4f(1.0f, 1.0f, 1.0f, bodyColor[3]);
+        EmitTexturedQuad(win.client.rect.x, win.client.rect.y, win.client.rect.w, win.client.rect.h,
+                          win.client.u0, win.client.v0, win.client.u1, win.client.v1);
+        glEnd();
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDisable(GL_TEXTURE_2D);
+    }
+    DrawCapturedOrSolidBatch(sharedTexture, sharedClientAreas, bodyColor);
+    DrawCapturedOrSolidBatch(sharedTexture, sharedTitleBars, titleColor);
 }
 
 void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfSizePx) {

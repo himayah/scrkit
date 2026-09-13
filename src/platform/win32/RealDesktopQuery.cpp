@@ -12,6 +12,7 @@
 #include <dwmapi.h>
 
 #include "../../core/Logger.h"
+#include "ScreenCapture.h"
 #include "StringConvert.h"
 
 namespace platform {
@@ -34,28 +35,10 @@ bool ClampRectToScreen(RECT& rect, int screenWidth, int screenHeight) {
     return rect.right > rect.left && rect.bottom > rect.top;
 }
 
-RECT GetVisibleWindowRect(HWND hwnd) {
-    RECT rect{};
-    // DWMWA_EXTENDED_FRAME_BOUNDS excludes the invisible drop-shadow margin
-    // GetWindowRect includes on Windows 10/11, so the box lines up with what
-    // is actually visible on screen (and in the captured clipping).
-    if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))) {
-        GetWindowRect(hwnd, &rect);
-    }
-    return rect;
-}
-
 bool IsCloaked(HWND hwnd) {
     DWORD cloaked = 0;
     return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
 }
-
-struct EnumWindowsContext {
-    int screenWidth = 0;
-    int screenHeight = 0;
-    float titleBarHeight = 0.0f;
-    std::vector<core::WindowElement>* out = nullptr;
-};
 
 // Shell/desktop-owned windows to never treat as a "real open window" -- most
 // notably Progman itself, which spans the entire screen and (perhaps
@@ -70,6 +53,13 @@ bool IsShellOwnedClass(const wchar_t* className) {
     }
     return false;
 }
+
+struct EnumWindowsContext {
+    int screenWidth = 0;
+    int screenHeight = 0;
+    float titleBarHeight = 0.0f;
+    std::vector<RealWindowInfo>* out = nullptr;
+};
 
 BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     auto* ctx = reinterpret_cast<EnumWindowsContext*>(lParam);
@@ -93,19 +83,31 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
 
     if (IsCloaked(hwnd)) return TRUE; // e.g. UWP windows parked on another virtual desktop
 
-    RECT rect = GetVisibleWindowRect(hwnd);
+    // Plain GetWindowRect (not DWMWA_EXTENDED_FRAME_BOUNDS) so this stays in
+    // the exact coordinate space PrintWindow itself uses below -- no
+    // separate sub-rect math needed to line the two up. PrintWindow doesn't
+    // render DWM's own drop-shadow decoration anyway (that's a compositor
+    // overlay, not something the window draws itself), so this is not a
+    // meaningful accuracy loss in practice.
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect)) return TRUE;
     if (!ClampRectToScreen(rect, ctx->screenWidth, ctx->screenHeight)) return TRUE;
 
-    core::WindowElement win;
-    win.x = static_cast<float>(rect.left);
-    win.y = static_cast<float>(rect.top);
-    win.width = static_cast<float>(rect.right - rect.left);
+    RealWindowInfo info;
+    info.element.x = static_cast<float>(rect.left);
+    info.element.y = static_cast<float>(rect.top);
+    info.element.width = static_cast<float>(rect.right - rect.left);
     const float totalHeight = static_cast<float>(rect.bottom - rect.top);
-    win.titleBarHeight = std::min(ctx->titleBarHeight, totalHeight * 0.5f);
-    win.height = totalHeight - win.titleBarHeight;
-    win.title = WideToUtf8(std::wstring(titleBuf, static_cast<size_t>(titleLen)));
+    info.element.titleBarHeight = std::min(ctx->titleBarHeight, totalHeight * 0.5f);
+    info.element.height = totalHeight - info.element.titleBarHeight;
+    info.element.title = WideToUtf8(std::wstring(titleBuf, static_cast<size_t>(titleLen)));
 
-    ctx->out->push_back(std::move(win));
+    // Captured here (before our own fullscreen window exists) so it shows
+    // this window's own true content even where something else currently
+    // overlaps it on the real screen (user feedback).
+    info.hasCapture = CaptureWindowToImage(hwnd, info.capture);
+
+    ctx->out->push_back(std::move(info));
     return TRUE;
 }
 
@@ -165,7 +167,7 @@ private:
 
 } // namespace
 
-bool QueryRealOpenWindows(int screenWidth, int screenHeight, std::vector<core::WindowElement>& out) {
+bool QueryRealOpenWindows(int screenWidth, int screenHeight, std::vector<RealWindowInfo>& out) {
     out.clear();
     EnumWindowsContext ctx;
     ctx.screenWidth = screenWidth;
@@ -182,8 +184,8 @@ bool QueryRealOpenWindows(int screenWidth, int screenHeight, std::vector<core::W
     return true;
 }
 
-bool QueryRealDesktopIcons(int screenWidth, int screenHeight, std::vector<core::IconElement>& out) {
-    out.clear();
+bool QueryRealDesktopIcons(int screenWidth, int screenHeight, RealIconLayerInfo& out) {
+    out = RealIconLayerInfo{};
 
     HWND listView = FindDesktopIconListView();
     if (!listView) {
@@ -195,6 +197,18 @@ bool QueryRealDesktopIcons(int screenWidth, int screenHeight, std::vector<core::
     if (count <= 0) {
         core::Logger::Warn("RealDesktopQuery: desktop reports 0 icons; caller should fall back");
         return false;
+    }
+
+    // One combined capture of the whole icon layer, taken before our own
+    // window exists, so it shows every icon uncovered even ones a window is
+    // currently sitting on top of (user feedback). A capture failure here
+    // is non-fatal -- positions are still useful with a solid-color/
+    // full-screen-capture fallback at the AppController level.
+    RECT viewRect{};
+    if (GetWindowRect(listView, &viewRect)) {
+        out.captureOriginX = static_cast<float>(viewRect.left);
+        out.captureOriginY = static_cast<float>(viewRect.top);
+        out.hasCapture = CaptureWindowToImage(listView, out.capture);
     }
 
     DWORD pid = 0;
@@ -250,12 +264,12 @@ bool QueryRealDesktopIcons(int screenWidth, int screenHeight, std::vector<core::
         icon.width = static_cast<float>(itemRect.right - itemRect.left);
         icon.height = static_cast<float>(itemRect.bottom - itemRect.top);
         icon.label = WideToUtf8(localText);
-        out.push_back(std::move(icon));
+        out.icons.push_back(std::move(icon));
     }
 
     CloseHandle(process);
 
-    if (out.empty()) {
+    if (out.icons.empty()) {
         core::Logger::Warn("RealDesktopQuery: could not read any real icon positions; caller should fall back");
         return false;
     }

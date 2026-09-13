@@ -134,13 +134,13 @@ std::wstring ResolveWallpaperPath(const core::ConfigModel& config) {
 // Shared render loop for both fullscreen and preview windows. Blocks until
 // the window is destroyed (by user input in fullscreen mode, or by the
 // preview parent going away). `desktopCapture`/`realIcons`/`realWindows`,
-// when non-null, must correspond to exactly width x height pixels (only
-// meaningful for the real fullscreen size -- callers never pass these for
-// the scaled-down preview).
+// when non-null, must have been captured/queried against exactly this same
+// width x height (only meaningful for the real fullscreen size -- callers
+// never pass these for the scaled-down preview).
 void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
                     const DecodedImage* desktopCapture = nullptr,
-                    const std::vector<core::IconElement>* realIcons = nullptr,
-                    const std::vector<core::WindowElement>* realWindows = nullptr) {
+                    const RealIconLayerInfo* realIcons = nullptr,
+                    const std::vector<RealWindowInfo>* realWindows = nullptr) {
     core::ConfigModel config = LoadConfigOrDefault();
     std::wstring wallpaper = ResolveWallpaperPath(config);
 
@@ -223,9 +223,9 @@ void RunFullScreenSaver(HINSTANCE instance) {
     // right now, so suction starts from their real spot instead of a random
     // one (user feedback). Read-only; falls back to the random layout if
     // this fails for any reason (see RealDesktopQuery.h).
-    std::vector<core::IconElement> realIcons;
+    RealIconLayerInfo realIcons;
     const bool haveRealIcons = QueryRealDesktopIcons(width, height, realIcons);
-    std::vector<core::WindowElement> realWindows;
+    std::vector<RealWindowInfo> realWindows;
     const bool haveRealWindows = QueryRealOpenWindows(width, height, realWindows);
 
     WindowContext ctx;

@@ -18,6 +18,7 @@
 #include "../../core/StateMachine.h"
 #include "../../core/SuctionCenterWalker.h"
 #include "ImageLoader.h"
+#include "RealDesktopQuery.h"
 #include "TextRenderer.h"
 
 namespace platform {
@@ -49,10 +50,14 @@ public:
     // `realIcons`/`realWindows`, when non-null and non-empty, replace the
     // randomly-generated layout with the real desktop icon/window positions
     // (see RealDesktopQuery) so suction starts from where things really are.
+    // Each also carries its own capture(s) of its real appearance -- when
+    // present, that takes priority over `desktopCapture` for that element,
+    // so overlapped windows/icons still show their own true content rather
+    // than whatever currently overlaps them on the real screen.
     bool Initialize(HDC hdc, int screenWidthPx, int screenHeightPx, const core::ConfigModel& config,
                     const std::wstring& wallpaperPath, const DecodedImage* desktopCapture = nullptr,
-                    const std::vector<core::IconElement>* realIcons = nullptr,
-                    const std::vector<core::WindowElement>* realWindows = nullptr);
+                    const RealIconLayerInfo* realIcons = nullptr,
+                    const std::vector<RealWindowInfo>* realWindows = nullptr);
 
     void Update(float dtSeconds);
     void Draw() const;
@@ -65,14 +70,21 @@ private:
     int screenHeight_ = 0;
     int resolvedParticleCount_ = 3000;
     GLuint backgroundTexture_ = 0;
-    GLuint captureTexture_ = 0; // 0 when no desktop capture was supplied
+    GLuint captureTexture_ = 0;   // full-screen fallback; 0 when no desktop capture was supplied
+    GLuint iconLayerTexture_ = 0; // whole real icon layer, own capture; 0 when unavailable
+    // Per-window own capture texture, parallel to layout_.windows; 0 for a
+    // window with no capture of its own (falls back to captureTexture_, or
+    // a solid color if that's also 0). Never populated for the randomly
+    // generated (non-real) layout.
+    std::vector<GLuint> windowTextures_;
     TextRenderer textRenderer_;
     core::DesktopLayout layout_; // generated once; reused every loop (要件4-6)
     std::vector<core::Particle> particles_; // generated once from the grid size
 
-    // UV rects into captureTexture_ for each icon / window's title bar and
-    // client area, computed once from their (fixed, original) layout
-    // position -- unused when captureTexture_ is 0.
+    // UV rects for each icon / window's title bar and client area, computed
+    // once from their (fixed, original) layout position -- into
+    // iconLayerTexture_/windowTextures_[i] when that element has its own
+    // capture, else into captureTexture_ (unused when neither is available).
     std::vector<UvRect> iconUv_;
     std::vector<UvRect> windowTitleUv_;
     std::vector<UvRect> windowClientUv_;
@@ -128,6 +140,10 @@ private:
     void DrawWindowsPhase() const;
     void DrawBackgroundPhase() const;
     void DrawResetPhase() const;
+
+    // windowTextures_[i], or 0 if i is out of range (e.g. randomly generated
+    // layout, which never has per-window captures).
+    GLuint WindowTexture(size_t i) const;
 };
 
 } // namespace platform
