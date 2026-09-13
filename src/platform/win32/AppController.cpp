@@ -172,7 +172,33 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         "AppController: decoded wallpaper " + std::to_string(image.width) + "x" + std::to_string(image.height) +
         ", sampled avg brightness=" + std::to_string(SampledAvgBrightness(image.rgba.data(), image.rgba.size() / 4)) +
         " (/255)");
-    backgroundTexture_ = CreateTextureFromImage(image);
+
+    // Composite the wallpaper the same way Windows actually positions/
+    // scales it (Fill/Fit/Stretch/Center/Tile) *before* building the visible
+    // background texture below -- stretching the raw decoded file across
+    // the whole screen (what this code used to do here) only matches the
+    // "Stretch" style; every other style (Fill, the Windows 10/11 default)
+    // scales and crops instead, so a plain stretch left the rendered
+    // background visibly shifted/distorted compared to the real desktop
+    // wallpaper shown just before the saver started (user feedback: "起動前
+    // の背景表示と起動後の...背景画像は明らかにずれている"). When a same-
+    // size real desktop capture is available, uses the *aligned* variant
+    // (core::CompositeWallpaperAligned), which searches the capture for
+    // Fill/Span's actual crop position instead of assuming it's centered
+    // (see its own doc comment). This one composited image is then reused
+    // below for the content diff too, so the rendered background and the
+    // diff always agree on what "the wallpaper" looks like.
+    const bool haveMatchingCapture =
+        desktopCapture && desktopCapture->width == screenWidth_ && desktopCapture->height == screenHeight_;
+    DecodedImage compositedWallpaper;
+    compositedWallpaper.width = screenWidth_;
+    compositedWallpaper.height = screenHeight_;
+    compositedWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
+    core::CompositeWallpaperAligned(image.rgba.data(), image.width, image.height, compositedWallpaper.rgba.data(),
+                                     screenWidth_, screenHeight_, GetSystemWallpaperFitMode(), desktopR, desktopG,
+                                     desktopB, haveMatchingCapture ? desktopCapture->rgba.data() : nullptr);
+
+    backgroundTexture_ = CreateTextureFromImage(compositedWallpaper);
     if (backgroundTexture_ == 0) {
         core::Logger::Error("AppController: failed to create background texture");
         return false;
@@ -217,32 +243,11 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     }
     contentParticles_.clear();
 
-    if (desktopCapture && desktopCapture->width == screenWidth_ && desktopCapture->height == screenHeight_) {
+    if (haveMatchingCapture) {
         captureTexture_ = CreateTextureFromImage(*desktopCapture);
         if (captureTexture_ != 0) {
-            // Composite the wallpaper the same way Windows actually
-            // positions/scales it (Fill/Fit/Stretch/Center/Tile) -- a plain
-            // stretch only matches the "Stretch" style, and mismatches
-            // elsewhere (Fill, the Windows 10/11 default, crops instead)
-            // made the diff flag large swaths of plain background as
-            // "content" (user feedback). Uses the *aligned* variant, which
-            // for Fill/Span searches the real capture for the actual crop
-            // position instead of assuming it's centered -- user feedback
-            // (real machine, an ultrawide 2560x1080 screen with a 3840x2160
-            // wallpaper file) showed a large, consistent vertical
-            // misalignment from that centered-crop assumption, most likely
-            // because the wallpaper carries an off-center "smart crop"
-            // (e.g. Windows Spotlight) that isn't the image's geometric
-            // center.
-            DecodedImage compositedWallpaper;
-            compositedWallpaper.width = screenWidth_;
-            compositedWallpaper.height = screenHeight_;
-            compositedWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
-            core::CompositeWallpaperAligned(image.rgba.data(), image.width, image.height,
-                                             compositedWallpaper.rgba.data(), screenWidth_, screenHeight_,
-                                             GetSystemWallpaperFitMode(), desktopR, desktopG, desktopB,
-                                             desktopCapture->rgba.data());
-
+            // Reuses the same compositedWallpaper built above for the
+            // visible background -- see the comment there.
             core::ContentMaskConfig maskConfig;
             maskConfig.screenWidth = screenWidth_;
             maskConfig.screenHeight = screenHeight_;
