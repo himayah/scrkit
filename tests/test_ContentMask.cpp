@@ -67,7 +67,7 @@ TEST_CASE(ContentMask_BelowFractionThresholdStaysFalse) {
     const int width = 64, height = 64, gridN = 4; // each cell is 16x16 = 256 px
     auto capture = SolidBuffer(width, height, 0, 0, 0);
     auto wallpaper = SolidBuffer(width, height, 0, 0, 0);
-    // Only 2 of 256 pixels in cell (0,0) differ -- well under the default 3%.
+    // Only 2 of 256 pixels in cell (0,0) differ -- well under the default fraction.
     FillRect(capture, width, 0, 0, 2, 1, 255, 255, 255);
 
     ContentMaskConfig config;
@@ -93,6 +93,69 @@ TEST_CASE(ContentMask_MinorPerPixelNoiseStaysBelowPixelThreshold) {
     config.gridN = gridN;
     auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
     for (bool cell : mask) CHECK(!cell);
+}
+
+TEST_CASE(ContentMask_ModeratePerPixelDiffBelowNewThresholdStaysFalse) {
+    // Models the scattered edge/anti-aliasing noise a detailed photographic
+    // wallpaper shows once decoded and scaled by a different pipeline than
+    // whatever rendered the real screen (real-machine feedback: analysis of
+    // debug_capture.bmp/debug_wallpaper.bmp found this kind of moderate,
+    // diffuse per-pixel diff across a wide swath of a mountain-photo
+    // wallpaper, well after the brightness/crop fixes). Every pixel differs
+    // by a moderate amount (diff=80, comfortably below pixelDiffThreshold's
+    // 90) -- none of them should even count as "differing" pixels, let
+    // alone flag the cell. Split across two channels in opposite directions
+    // (+40/-40) so the R+G+B sum -- and so the brightness-gain correction's
+    // computed gain -- stays neutral, matching realistic texture noise
+    // (which isn't isolated to a single channel) rather than accidentally
+    // exercising the gain correction.
+    const int width = 32, height = 32, gridN = 2;
+    auto capture = SolidBuffer(width, height, 100, 100, 100);
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+    for (size_t i = 0; i < capture.size(); i += 4) {
+        capture[i + 0] = 140; // |100-140| = 40
+        capture[i + 1] = 60;  // |100-60| = 40 (opposite direction keeps the sum unchanged)
+    }
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    for (bool cell : mask) CHECK(!cell);
+}
+
+TEST_CASE(ContentMask_ScatteredDiffBelowNewFractionStaysFalse) {
+    // A minority of a cell's pixels (10%, below the new 12% fraction) show a
+    // stark diff -- e.g. a few genuinely mismatched edge pixels scattered
+    // through an otherwise-matching cell -- shouldn't be enough to flag the
+    // whole cell as content on its own.
+    const int width = 100, height = 10, gridN = 1; // single 1000px cell
+    auto capture = SolidBuffer(width, height, 0, 0, 0);
+    auto wallpaper = SolidBuffer(width, height, 0, 0, 0);
+    FillRect(capture, width, 0, 0, 10, 10, 255, 255, 255); // 100/1000 = 10%
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    for (bool cell : mask) CHECK(!cell);
+}
+
+TEST_CASE(ContentMask_ScatteredDiffAboveNewFractionIsFlagged) {
+    // Same setup as above but with enough genuinely differing pixels (15%,
+    // above the new 12% fraction) to still be recognized as real content --
+    // the widened threshold isn't a free pass for anything short of a
+    // completely different image.
+    const int width = 100, height = 10, gridN = 1; // single 1000px cell
+    auto capture = SolidBuffer(width, height, 0, 0, 0);
+    auto wallpaper = SolidBuffer(width, height, 0, 0, 0);
+    FillRect(capture, width, 0, 0, 15, 10, 255, 255, 255); // 150/1000 = 15%
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    for (bool cell : mask) CHECK(cell);
 }
 
 TEST_CASE(ContentMask_UniformBrightnessOffsetDoesNotFlagPlainBackground) {

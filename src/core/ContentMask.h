@@ -24,10 +24,29 @@ struct ContentMaskConfig {
     int screenHeight = 1080;
     int gridN = 32; // same grid partition as core::BuildParticleGrid
     // A pixel counts as "different" once |ΔR|+|ΔG|+|ΔB| exceeds this.
-    int pixelDiffThreshold = 24;
+    //
+    // Higher than it might look for a per-pixel color comparison: even after
+    // brightness-gain correction and crop-offset alignment (see
+    // core::ComputeContentMask / core::CompositeWallpaperAligned) fix the
+    // *systematic* mismatches, a detailed photographic wallpaper still shows
+    // scattered moderate-magnitude per-pixel diffs (edge/anti-aliasing noise
+    // along mountain ridgelines, tree lines, etc.) purely from being decoded
+    // and scaled by a different pipeline (this code's own WIC decode) than
+    // whatever rendered the real screen -- real-machine feedback (analysis
+    // of debug_capture.bmp/debug_wallpaper.bmp, see spiral-saver-open-work
+    // memory) found ~38% of pixels in that "moderate" 24-400 diff band vs.
+    // only ~16% in a "near-total mismatch" band that corresponded to actual
+    // real content (an open window, desktop icons). 90 sits above that
+    // texture-noise band while staying far below the stark contrast a real
+    // UI element produces against a photo background.
+    int pixelDiffThreshold = 90;
     // A cell counts as real-desktop "content" once at least this fraction
-    // of its pixels differ.
-    float cellDifferingFraction = 0.03f;
+    // of its pixels differ. Widened from an earlier 0.03 (3%) for the same
+    // reason as pixelDiffThreshold above -- that texture-noise band isn't
+    // confined to a few odd pixels, it's spread widely enough across a
+    // detailed background that even a fairly generous per-pixel threshold
+    // alone wasn't enough to keep whole cells from tripping a 3% floor.
+    float cellDifferingFraction = 0.12f;
 };
 
 // Returns gridN*gridN bools, in the same row-major cell order as
