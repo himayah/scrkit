@@ -120,14 +120,20 @@ cmake --build build-win
 
 ### GitHub Actions でビルドする (Windows 環境が無い場合)
 
-`.github/workflows/build.yml` は `main` への push のたびに、`windows-latest` ランナー上で
-MSVC を使って実際に `.scr` をビルドし、Actions の実行結果にアーティファクト
-(`SpiralSuctionSaver-scr`) としてアップロードします（同時に Linux 上での `src/core/`
-ユニットテストも実行します）。Windows 実機や MinGW-w64 クロスコンパイル環境が手元に
-無くても、これだけで実際の Windows ビルドを取得できます。
+`.github/workflows/build.yml` は push・PR のたびに、`windows-latest` ランナー上で MSVC
+を使って実際に `.scr` をビルドします（同時に Linux 上での `src/core/` ユニットテストも
+実行します）。Windows 実機や MinGW-w64 クロスコンパイル環境が手元に無くても、これだけで
+実際の Windows ビルドを取得できます。ビルド済みバイナリはリポジトリには**コミットしない**
+方針としており（差分が読みにくくなる・リポジトリが肥大化するため）、取得方法は用途に応じて
+以下の2通りです。
+
+#### 開発中のビルドを試す (Actions Artifacts)
+
+任意のコミット・ブランチ・PR の実行結果からダウンロードできます（保持期間はデフォルトで
+90日）。
 
 1. GitHub の対象リポジトリで「Actions」タブを開き、`build` ワークフローの実行から
-   対象のコミット（通常は最新の成功した push）を選びます。
+   対象のコミットを選びます。
 2. `gh` CLI がある場合は次のように実行できます。
 
    ```bash
@@ -139,9 +145,20 @@ MSVC を使って実際に `.scr` をビルドし、Actions の実行結果に�
    ブラウザから行う場合は、該当の Actions 実行ページを開き、「Artifacts」欄の
    `SpiralSuctionSaver-scr` をクリックしてダウンロードします（zip 展開後に `.scr` が
    出てきます）。
-3. リポジトリ直下の `SpiralSuctionSaver.scr` は、この方法で最新の `main` からビルドした
-   ものを都度コミットしてあります。ビルド環境を用意せずすぐ試したいだけであれば、これを
-   直接 [起動方法](#起動方法) の手順でそのまま使えます。
+
+#### 安定版を試す (GitHub Releases)
+
+`v*` 形式のタグ（例: `v1.0.0`）を push すると、ワークフローの `release` ジョブが自動的に
+その時点のビルドを GitHub Releases のアセットとして公開します。
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+リポジトリの「Releases」ページから該当バージョンの `SpiralSuctionSaver.scr` を直接
+ダウンロードできます。ビルド環境を用意せずすぐ試したいだけであれば、こちらが最も簡単です。
+ダウンロードしたファイルは、そのまま [起動方法](#起動方法) の手順で使えます。
 
 ### コアロジックの単体テストのみをビルド (Windows 不要、Linux 上で完結)
 
