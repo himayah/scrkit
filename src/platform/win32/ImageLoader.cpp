@@ -146,26 +146,60 @@ DecodedImage MakeFallbackImage(uint8_t r, uint8_t g, uint8_t b) {
     return image;
 }
 
-GLuint CreateTextureFromImage(const DecodedImage& image) {
-    if (image.width <= 0 || image.height <= 0 ||
-        image.rgba.size() < static_cast<size_t>(image.width) * image.height * 4) {
-        return 0;
-    }
+namespace {
+
+GLuint UploadRgbaTexture(int width, int height, const uint8_t* rgba) {
+    if (width <= 0 || height <= 0 || rgba == nullptr) return 0;
 
     GLuint texture = 0;
     glGenTextures(1, &texture);
-    if (texture == 0) {
-        return 0;
-    }
+    if (texture == 0) return 0;
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, image.rgba.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     glBindTexture(GL_TEXTURE_2D, 0);
     return texture;
+}
+
+} // namespace
+
+GLuint CreateTextureFromImage(const DecodedImage& image) {
+    if (image.width <= 0 || image.height <= 0 ||
+        image.rgba.size() < static_cast<size_t>(image.width) * image.height * 4) {
+        return 0;
+    }
+    return UploadRgbaTexture(image.width, image.height, image.rgba.data());
+}
+
+GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN) {
+    if (image.width <= 0 || image.height <= 0 || gridN <= 0 ||
+        image.rgba.size() < static_cast<size_t>(image.width) * image.height * 4 ||
+        mask.size() < static_cast<size_t>(gridN) * gridN) {
+        return 0;
+    }
+
+    std::vector<uint8_t> masked = image.rgba; // copy: never mutate the caller's capture buffer
+    const int cellW = image.width / gridN;
+    const int cellH = image.height / gridN;
+    for (int y = 0; y < image.height; ++y) {
+        int row = y / (cellH > 0 ? cellH : 1);
+        if (row >= gridN) row = gridN - 1; // last row/col absorb the width/height%gridN remainder
+        for (int x = 0; x < image.width; ++x) {
+            int col = x / (cellW > 0 ? cellW : 1);
+            if (col >= gridN) col = gridN - 1;
+            if (!mask[static_cast<size_t>(row) * gridN + col]) {
+                masked[(static_cast<size_t>(y) * image.width + x) * 4 + 3] = 0;
+            }
+        }
+    }
+    return UploadRgbaTexture(image.width, image.height, masked.data());
+}
+
+GLuint CreateTextureFromRgba(int width, int height, const uint8_t* rgba) {
+    return UploadRgbaTexture(width, height, rgba);
 }
 
 } // namespace platform

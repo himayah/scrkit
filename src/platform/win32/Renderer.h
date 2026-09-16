@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include "../../core/effects/DrawList.h"
 #include "GLCompat.h"
 
 namespace platform {
@@ -45,5 +46,23 @@ void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHei
 // (e.g. no desktop capture was available for the content phase).
 void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfWidthPx,
                            float halfHeightPx);
+
+// Resolves a core::fx::TextureRole(+index) to the actual GL texture
+// ExecuteDrawList should bind (§7.2). Returns 0 (silently skipped) for a
+// HueRing index that isn't ready yet or is out of range.
+struct EffectTextureTable {
+    GLuint background = 0;
+    GLuint foreground = 0;
+    std::vector<GLuint> hueRings; // index-addressed; a 0 entry means "not generated yet"
+
+    GLuint Resolve(core::fx::TextureRole role, int index) const;
+};
+
+// Executes one core::fx::FrameDrawList (§4.6/§7.2): one glPushMatrix/
+// transform/glColorMask/glBlendFunc/glBegin(GL_QUADS)...glEnd/glPopMatrix
+// per batch, in list order (core already puts background batches before
+// foreground ones). A batch whose texture isn't ready (Resolve returns 0)
+// is skipped rather than drawn untextured.
+void ExecuteDrawList(const core::fx::FrameDrawList& list, const EffectTextureTable& textures);
 
 } // namespace platform

@@ -137,7 +137,7 @@ std::wstring ResolveWallpaperPath(const core::ConfigModel& config) {
 // for the real fullscreen size -- callers never pass it for the scaled-down
 // preview).
 void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
-                    const DecodedImage* desktopCapture = nullptr) {
+                    const DecodedImage* desktopCapture = nullptr, bool isPreviewMode = false) {
     SetupOrthoProjection2D(width, height);
 
     // Show the just-captured real desktop immediately, before doing any of
@@ -159,7 +159,8 @@ void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
     std::wstring wallpaper = ResolveWallpaperPath(config);
 
     AppController app;
-    const bool initialized = app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture);
+    const bool initialized =
+        app.Initialize(gl.GetHDC(), width, height, config, wallpaper, desktopCapture, isPreviewMode);
     if (previewTexture != 0) {
         glDeleteTextures(1, &previewTexture);
     }
@@ -263,7 +264,7 @@ void RunFullScreenSaver(HINSTANCE instance) {
 
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr);
+        RunMessageLoop(hwnd, gl, width, height, haveCapture ? &desktopCapture : nullptr, /*isPreviewMode=*/false);
         gl.Destroy();
     } else {
         core::Logger::Error("RunFullScreenSaver: OpenGL context creation failed");
@@ -303,7 +304,7 @@ void RunPreview(HINSTANCE instance, HWND previewParent) {
 
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        RunMessageLoop(hwnd, gl, width, height);
+        RunMessageLoop(hwnd, gl, width, height, /*desktopCapture=*/nullptr, /*isPreviewMode=*/true);
         gl.Destroy();
     }
 

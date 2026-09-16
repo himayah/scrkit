@@ -8,24 +8,15 @@
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
-#include "Renderer.h"
 #include "WallpaperProvider.h"
 
 namespace platform {
-
-namespace {
-
-bool AllDead(const std::vector<core::SpiralState>& states) {
-    return std::all_of(states.begin(), states.end(), [](const core::SpiralState& s) { return !s.alive; });
-}
-
-} // namespace
 
 AppController::~AppController() { Shutdown(); }
 
 bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
                                 const core::ConfigModel& config, const std::wstring& wallpaperPath,
-                                const DecodedImage* desktopCapture) {
+                                const DecodedImage* desktopCapture, bool isPreviewMode) {
     screenWidth_ = screenWidthPx;
     screenHeight_ = screenHeightPx;
 
@@ -53,19 +44,13 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 
     // Composite the wallpaper the same way Windows actually positions/
     // scales it (Fill/Fit/Stretch/Center/Tile) *before* building the visible
-    // background texture below -- stretching the raw decoded file across
-    // the whole screen (what this code used to do here) only matches the
-    // "Stretch" style; every other style (Fill, the Windows 10/11 default)
-    // scales and crops instead, so a plain stretch left the rendered
-    // background visibly shifted/distorted compared to the real desktop
-    // wallpaper shown just before the saver started (user feedback: "起動前
-    // の背景表示と起動後の...背景画像は明らかにずれている"). When a same-
-    // size real desktop capture is available, uses the *aligned* variant
-    // (core::CompositeWallpaperAligned), which searches the capture for
-    // Fill/Span's actual crop position instead of assuming it's centered
-    // (see its own doc comment). This one composited image is then reused
-    // below for the content diff too, so the rendered background and the
-    // diff always agree on what "the wallpaper" looks like.
+    // background texture below -- see git history for the full rationale.
+    // When a same-size real desktop capture is available, uses the *aligned*
+    // variant (core::CompositeWallpaperAligned), which searches the capture
+    // for Fill/Span's actual crop position instead of assuming it's centered.
+    // This one composited image is then reused below for the content diff
+    // too, so the rendered background and the diff always agree on what "the
+    // wallpaper" looks like.
     const bool haveMatchingCapture =
         desktopCapture && desktopCapture->width == screenWidth_ && desktopCapture->height == screenHeight_;
     DecodedImage compositedWallpaper;
@@ -83,9 +68,8 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     }
 
     // 2. Particle count: resolve Auto/Custom/preset into a concrete count,
-    //    then lay out the NxN grid (要件.txt §5, §6). Computed before the
-    //    content diff below, since the content phase re-uses this exact
-    //    same grid (only a filtered subset of it).
+    //    then lay out the NxN grid (要件.txt §5, §6). Both layers' cells
+    //    come from this same grid (DESIGN_EFFECTS.md §4.1's LayerSource).
     const int autoCount = ResolveAutoParticleCountFromCurrentContext();
     resolvedParticleCount_ = config.ResolveParticleCount(autoCount);
     if (resolvedParticleCount_ < 1) resolvedParticleCount_ = 1;
@@ -96,52 +80,52 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     gridConfig.gridN = core::ComputeGridDimensionForParticleCount(resolvedParticleCount_);
     gridConfig.particleCount = resolvedParticleCount_;
     particles_ = core::BuildParticleGrid(gridConfig);
+    gridN_ = gridConfig.gridN;
 
     // Slightly oversize each particle relative to its grid cell so adjacent
-    // particles overlap a hair instead of leaving hairline seams, while
-    // still tiling the screen with no large gaps for any particle count.
-    // Kept per-axis (not forced square via max(cellWidth, cellHeight)) since
-    // a grid cell isn't square on a non-square screen -- a square quad would
-    // stretch whatever it samples (user feedback: icons/taskbar text looked
-    // vertically stretched in the content phase).
-    const float cellWidth = static_cast<float>(screenWidth_) / static_cast<float>(std::max(1, gridConfig.gridN));
-    const float cellHeight = static_cast<float>(screenHeight_) / static_cast<float>(std::max(1, gridConfig.gridN));
+    // particles overlap a hair instead of leaving hairline seams. Kept
+    // per-axis (not forced square) since a grid cell isn't square on a
+    // non-square screen.
+    const float cellWidth = static_cast<float>(screenWidth_) / static_cast<float>(std::max(1, gridN_));
+    const float cellHeight = static_cast<float>(screenHeight_) / static_cast<float>(std::max(1, gridN_));
     particleHalfWidthPx_ = cellWidth * 0.55f;
     particleHalfHeightPx_ = cellHeight * 0.55f;
 
     // 3. Real desktop capture + content diff (optional): a still image of
     //    the real screen, diffed cell-by-cell against the wallpaper (same
     //    grid as particles_ above) so only the cells that actually differ --
-    //    real icons, the taskbar, open windows -- become "content" particles
-    //    (user feedback: querying/capturing individual windows and icons did
-    //    not hold up in practice; a single whole-screen diff replaces that).
-    if (captureTexture_ != 0) {
-        glDeleteTextures(1, &captureTexture_);
-        captureTexture_ = 0;
+    //    real icons, the taskbar, open windows -- become foreground content.
+    if (foregroundTexture_ != 0) {
+        glDeleteTextures(1, &foregroundTexture_);
+        foregroundTexture_ = 0;
     }
     contentParticles_.clear();
+    std::vector<int> contentCellIndices;
 
     if (haveMatchingCapture) {
-        captureTexture_ = CreateTextureFromImage(*desktopCapture);
-        if (captureTexture_ != 0) {
-            // Reuses the same compositedWallpaper built above for the
-            // visible background -- see the comment there.
-            core::ContentMaskConfig maskConfig;
-            maskConfig.screenWidth = screenWidth_;
-            maskConfig.screenHeight = screenHeight_;
-            maskConfig.gridN = gridConfig.gridN;
-            const std::vector<bool> mask = core::ComputeContentMask(
-                desktopCapture->rgba.data(), compositedWallpaper.rgba.data(), maskConfig);
+        core::ContentMaskConfig maskConfig;
+        maskConfig.screenWidth = screenWidth_;
+        maskConfig.screenHeight = screenHeight_;
+        maskConfig.gridN = gridN_;
+        const std::vector<bool> mask =
+            core::ComputeContentMask(desktopCapture->rgba.data(), compositedWallpaper.rgba.data(), maskConfig);
 
-            for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
-                if (mask[i]) contentParticles_.push_back(particles_[i]);
+        for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
+            if (mask[i]) {
+                contentParticles_.push_back(particles_[i]);
+                contentCellIndices.push_back(static_cast<int>(i));
             }
-            core::Logger::Info("AppController: " + std::to_string(contentParticles_.size()) + "/" +
-                                std::to_string(particles_.size()) +
-                                " grid cell(s) flagged as real desktop content");
-        } else {
-            core::Logger::Warn("AppController: failed to create desktop capture texture; content phase will be skipped");
         }
+
+        // §7.4: the foreground texture is the capture itself with every
+        // non-diff cell's alpha zeroed, not a separate "capture texture" the
+        // renderer has to know how to mask at draw time (D-3).
+        foregroundTexture_ = CreateMaskedTextureFromImage(*desktopCapture, mask, gridN_);
+        if (foregroundTexture_ == 0) {
+            core::Logger::Warn("AppController: failed to create foreground texture; content phase will be skipped");
+        }
+        core::Logger::Info("AppController: " + std::to_string(contentParticles_.size()) + "/" +
+                            std::to_string(particles_.size()) + " grid cell(s) flagged as real desktop content");
     } else if (desktopCapture) {
         core::Logger::Warn("AppController: desktop capture size (" + std::to_string(desktopCapture->width) +
                             "x" + std::to_string(desktopCapture->height) + ") does not match screen (" +
@@ -149,16 +133,59 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
                             "); content phase will be skipped");
     }
 
+    // Whether the foreground layer has anything to show, and if not, why
+    // (DESIGN_EFFECTS.md §4.1/§5.3, D-15): a genuine 0-diff result is treated
+    // the same as a capture failure for timing purposes (both should skip
+    // fast in fullscreen mode, matching v1's existing behavior of an
+    // instantly-AllDead empty spiral array) -- the PreviewMode/CaptureFailed
+    // split only matters for /p vs /s, not for "why did content end up empty".
+    const bool hasForegroundContent = haveMatchingCapture && foregroundTexture_ != 0 && !contentParticles_.empty();
+    foregroundEmptyReason_ = hasForegroundContent
+                                  ? core::fx::EmptyReason::NotEmpty
+                                  : (isPreviewMode ? core::fx::EmptyReason::PreviewMode
+                                                   : core::fx::EmptyReason::CaptureFailed);
+
     // 4. Suction center random walk (要件.txt §4: 速度は一定, 1〜3px/frame).
     rng_ = std::make_unique<core::Mt19937RandomSource>(std::random_device{}());
     core::WalkerBounds bounds{0.0f, 0.0f, static_cast<float>(screenWidth_), static_cast<float>(screenHeight_)};
     core::Vec2 startCenter{screenWidth_ * 0.5f, screenHeight_ * 0.5f};
     center_ = std::make_unique<core::SuctionCenterWalker>(startCenter, bounds, 2.0f);
 
+    // 5. Effect engine (DESIGN_EFFECTS.md §2, §16 Step 8): built after rng_
+    //    since it shares that same RNG for scheduling (D-11 -- distinct from
+    //    each individual effect's own private per-instance RNG).
+    core::fx::LayerSource foregroundLayer;
+    foregroundLayer.kind = core::fx::LayerKind::Foreground;
+    foregroundLayer.texture = core::fx::TextureRole::Foreground;
+    foregroundLayer.screenW = static_cast<float>(screenWidth_);
+    foregroundLayer.screenH = static_cast<float>(screenHeight_);
+    foregroundLayer.gridN = gridN_;
+    foregroundLayer.cellIndices = contentCellIndices;
+    foregroundLayer.cells = contentParticles_;
+    foregroundLayer.cellHalfW = particleHalfWidthPx_;
+    foregroundLayer.cellHalfH = particleHalfHeightPx_;
+    foregroundLayer.empty = !hasForegroundContent;
+    foregroundLayer.emptyReason = foregroundEmptyReason_;
+
+    core::fx::LayerSource backgroundLayer;
+    backgroundLayer.kind = core::fx::LayerKind::Background;
+    backgroundLayer.texture = core::fx::TextureRole::Background;
+    backgroundLayer.screenW = static_cast<float>(screenWidth_);
+    backgroundLayer.screenH = static_cast<float>(screenHeight_);
+    backgroundLayer.gridN = gridN_;
+    backgroundLayer.cellIndices.resize(particles_.size());
+    for (size_t i = 0; i < particles_.size(); ++i) backgroundLayer.cellIndices[i] = static_cast<int>(i);
+    backgroundLayer.cells = particles_;
+    backgroundLayer.cellHalfW = particleHalfWidthPx_;
+    backgroundLayer.cellHalfH = particleHalfHeightPx_;
+
+    effectEngine_ = std::make_unique<core::fx::EffectEngine>(config.effects, *rng_);
+    effectEngine_->SetLayers(std::move(foregroundLayer), std::move(backgroundLayer));
+
     stateMachine_ = core::SaverStateMachine(core::SaverState::STATE_CONTENT);
-    contentInitialized_ = particlesInitialized_ = false;
     blackHoldTimer_ = resetHoldTimer_ = 0.0f;
     fade_.Reset();
+    OnStateEntered(core::SaverState::STATE_CONTENT); // kick off both layers' effect state machines
 
     core::Logger::Info("AppController: initialized (" + std::to_string(resolvedParticleCount_) +
                         " particles, " + std::to_string(contentParticles_.size()) + " content cell(s))");
@@ -166,96 +193,20 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 }
 
 void AppController::Shutdown() {
+    effectEngine_.reset();
     if (backgroundTexture_ != 0) {
         glDeleteTextures(1, &backgroundTexture_);
         backgroundTexture_ = 0;
     }
-    if (captureTexture_ != 0) {
-        glDeleteTextures(1, &captureTexture_);
-        captureTexture_ = 0;
+    if (foregroundTexture_ != 0) {
+        glDeleteTextures(1, &foregroundTexture_);
+        foregroundTexture_ = 0;
     }
 }
 
-void AppController::EnsureContentSpiralsInit(core::Vec2 centerPos) {
-    if (contentInitialized_) return;
-    contentSpirals_.resize(contentParticles_.size());
-    contentCurrentPos_.resize(contentParticles_.size());
-    contentSpiralParams_.resize(contentParticles_.size());
-    for (size_t i = 0; i < contentParticles_.size(); ++i) {
-        const auto& p = contentParticles_[i];
-        contentSpirals_[i] = core::MakeSpiralState(p.x, p.y, centerPos.x, centerPos.y);
-        contentCurrentPos_[i] = {p.x, p.y};
-        // 追加要望: らせん回転をもっと緩やかにし、3〜5周回するくらいで中心に
-        // 消えるようにする -- 個体差として範囲内でランダム化する。
-        const float targetRevolutions =
-            kSpiralMinRevolutions + rng_->NextFloat01() * (kSpiralMaxRevolutions - kSpiralMinRevolutions);
-        contentSpiralParams_[i] =
-            core::MakeParamsForRevolutions(contentSpirals_[i].r, kContentSuctionSpeed, targetRevolutions);
-    }
-    contentInitialized_ = true;
-}
-
-void AppController::EnsureParticleSpiralsInit(core::Vec2 centerPos) {
-    if (particlesInitialized_) return;
-    particleSpirals_.resize(particles_.size());
-    particleCurrentPos_.resize(particles_.size());
-    particleSpiralParams_.resize(particles_.size());
-    // 要件.txt §7: 粒子が多いときは軽量な吸い込み速度を使う。
-    const float suctionSpeed = resolvedParticleCount_ > kLightweightParticleThreshold
-                                    ? core::LightweightSpiralParams().suctionSpeed
-                                    : core::NormalSpiralParams().suctionSpeed;
-    for (size_t i = 0; i < particles_.size(); ++i) {
-        particleSpirals_[i] = core::MakeSpiralState(particles_[i].x, particles_[i].y, centerPos.x, centerPos.y);
-        particleCurrentPos_[i] = {particles_[i].x, particles_[i].y};
-        // 追加要望: 背景画像側のらせん回転ももっと緩やかに、3〜5周回するくらい
-        // にする -- content側と同じ考え方で個体差をランダム化する。
-        const float targetRevolutions =
-            kSpiralMinRevolutions + rng_->NextFloat01() * (kSpiralMaxRevolutions - kSpiralMinRevolutions);
-        particleSpiralParams_[i] = core::MakeParamsForRevolutions(particleSpirals_[i].r, suctionSpeed, targetRevolutions);
-        // 追加要望: 背景画像が吸い込まれるとき、中心に近づくほど角速度を上げて
-        // らせん状に歪める(この効果は維持する)。
-        particleSpiralParams_[i].centerAccelFactor = kParticleCenterAccelFactor;
-    }
-    particlesInitialized_ = true;
-}
-
-void AppController::StepContentSpirals(core::Vec2 centerPos) {
-    for (size_t i = 0; i < contentSpirals_.size(); ++i) {
-        if (contentSpirals_[i].alive) {
-            contentCurrentPos_[i] =
-                core::StepSpiral(contentSpirals_[i], contentSpiralParams_[i], centerPos.x, centerPos.y);
-        }
-    }
-}
-
-void AppController::StepParticleSpirals(core::Vec2 centerPos) {
-    for (size_t i = 0; i < particleSpirals_.size(); ++i) {
-        if (particleSpirals_[i].alive) {
-            particleCurrentPos_[i] =
-                core::StepSpiral(particleSpirals_[i], particleSpiralParams_[i], centerPos.x, centerPos.y);
-        }
-    }
-}
-
-void AppController::OnStateEntered(core::SaverState newState, core::Vec2 centerPos) {
-    // Eagerly (re-)initialize the newly-entered phase's spiral state right
-    // away, in the same Update() call that triggered the transition. Without
-    // this, the Draw() call immediately following this Update() would see an
-    // empty/stale spiral array for one frame (harmless, but an easy-to-avoid
-    // blank flash) since the lazy EnsureXxxInit() calls in Update()'s state
-    // switch only run for whichever state is *current* at the top of that
-    // function, not the one just transitioned into.
+void AppController::OnStateEntered(core::SaverState newState) {
+    if (effectEngine_) effectEngine_->OnPhaseEntered(newState);
     switch (newState) {
-        case core::SaverState::STATE_CONTENT:
-            // Loop restart (要件.txt §4 step 7): everything re-spirals in from
-            // its original position next time each phase is entered.
-            contentInitialized_ = false;
-            particlesInitialized_ = false;
-            EnsureContentSpiralsInit(centerPos);
-            break;
-        case core::SaverState::STATE_BACKGROUND:
-            EnsureParticleSpiralsInit(centerPos);
-            break;
         case core::SaverState::STATE_BLACK:
             blackHoldTimer_ = 0.0f;
             break;
@@ -265,26 +216,30 @@ void AppController::OnStateEntered(core::SaverState newState, core::Vec2 centerP
         case core::SaverState::STATE_RESET:
             resetHoldTimer_ = 0.0f;
             break;
+        default:
+            break;
     }
 }
 
 void AppController::Update(float dtSeconds) {
-    if (!center_ || !rng_) return;
+    if (!center_ || !rng_ || !effectEngine_) return;
 
     center_->Step(*rng_);
     const core::Vec2 centerPos = center_->Position();
 
+    core::fx::EffectEngine::Inputs fxIn;
+    fxIn.dt = dtSeconds;
+    fxIn.suctionCenter = {centerPos.x, centerPos.y};
+    fxIn.hueShiftReady = true; // wired for real in §16 Step 10
+    const core::fx::EffectEngine::Outputs fxOut = effectEngine_->Update(fxIn);
+
     core::StateMachineInputs inputs;
     switch (stateMachine_.Current()) {
         case core::SaverState::STATE_CONTENT:
-            EnsureContentSpiralsInit(centerPos);
-            StepContentSpirals(centerPos);
-            inputs.allContentConsumed = AllDead(contentSpirals_);
+            inputs.allContentConsumed = fxOut.foregroundConsumed;
             break;
         case core::SaverState::STATE_BACKGROUND:
-            EnsureParticleSpiralsInit(centerPos);
-            StepParticleSpirals(centerPos);
-            inputs.allParticlesConsumed = AllDead(particleSpirals_);
+            inputs.allParticlesConsumed = fxOut.backgroundConsumed;
             break;
         case core::SaverState::STATE_BLACK:
             blackHoldTimer_ += dtSeconds;
@@ -301,55 +256,26 @@ void AppController::Update(float dtSeconds) {
     }
 
     if (stateMachine_.Advance(inputs)) {
-        OnStateEntered(stateMachine_.Current(), centerPos);
+        OnStateEntered(stateMachine_.Current());
     }
 }
 
-void AppController::DrawContentPhase() const {
-    DrawFullscreenTexturedQuad(backgroundTexture_, screenWidth_, screenHeight_, 1.0f);
-
-    std::vector<DrawParticle> drawParticles;
-    drawParticles.reserve(contentParticles_.size());
-    for (size_t i = 0; i < contentParticles_.size(); ++i) {
-        if (i < contentSpirals_.size() && !contentSpirals_[i].alive) continue;
-        const auto& p = contentParticles_[i];
-        const auto& pos = i < contentCurrentPos_.size() ? contentCurrentPos_[i] : core::Vec2{p.x, p.y};
-        drawParticles.push_back({pos.x, pos.y, p.u0, p.v0, p.u1, p.v1});
-    }
-    DrawParticlesBatched(captureTexture_, drawParticles, particleHalfWidthPx_, particleHalfHeightPx_);
-}
-
-void AppController::DrawBackgroundPhase() const {
-    ClearBlack(); // consumed particles reveal black underneath (要件.txt §4)
-    std::vector<DrawParticle> drawParticles;
-    drawParticles.reserve(particles_.size());
-    for (size_t i = 0; i < particles_.size(); ++i) {
-        if (i >= particleSpirals_.size() || !particleSpirals_[i].alive) continue;
-        const auto& p = particles_[i];
-        const auto& pos = particleCurrentPos_[i];
-        drawParticles.push_back({pos.x, pos.y, p.u0, p.v0, p.u1, p.v1});
-    }
-    DrawParticlesBatched(backgroundTexture_, drawParticles, particleHalfWidthPx_, particleHalfHeightPx_);
-}
-
-void AppController::DrawResetPhase() const {
-    DrawFullscreenTexturedQuad(backgroundTexture_, screenWidth_, screenHeight_, 1.0f);
-
-    std::vector<DrawParticle> drawParticles;
-    drawParticles.reserve(contentParticles_.size());
-    for (const auto& p : contentParticles_) {
-        drawParticles.push_back({p.x, p.y, p.u0, p.v0, p.u1, p.v1}); // original position, at rest
-    }
-    DrawParticlesBatched(captureTexture_, drawParticles, particleHalfWidthPx_, particleHalfHeightPx_);
+EffectTextureTable AppController::BuildTextureTable() const {
+    EffectTextureTable table;
+    table.background = backgroundTexture_;
+    table.foreground = foregroundTexture_;
+    // hueRings populated once §16 Step 10 lands; HueShift isn't registered
+    // yet so leaving this empty just means it's never picked (§5.5).
+    return table;
 }
 
 void AppController::Draw() const {
     switch (stateMachine_.Current()) {
         case core::SaverState::STATE_CONTENT:
-            DrawContentPhase();
-            break;
         case core::SaverState::STATE_BACKGROUND:
-            DrawBackgroundPhase();
+        case core::SaverState::STATE_RESET:
+            ClearBlack();
+            if (effectEngine_) ExecuteDrawList(effectEngine_->DrawList(), BuildTextureTable());
             break;
         case core::SaverState::STATE_BLACK:
             ClearBlack();
@@ -357,9 +283,6 @@ void AppController::Draw() const {
         case core::SaverState::STATE_FADE:
             ClearBlack();
             DrawFullscreenTexturedQuad(backgroundTexture_, screenWidth_, screenHeight_, fade_.Alpha());
-            break;
-        case core::SaverState::STATE_RESET:
-            DrawResetPhase();
             break;
     }
 }

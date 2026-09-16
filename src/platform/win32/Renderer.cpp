@@ -1,8 +1,12 @@
 #include "Renderer.h"
 
+#include <cmath>
+
 namespace platform {
 
 namespace {
+
+constexpr float kRadToDeg = 180.0f / 3.14159265358979323846f;
 
 inline void EmitTexturedQuad(float x, float y, float w, float h, float u0, float v0, float u1,
                               float v1) {
@@ -67,6 +71,79 @@ void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& parti
     }
     glEnd();
 
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_TEXTURE_2D);
+}
+
+GLuint EffectTextureTable::Resolve(core::fx::TextureRole role, int index) const {
+    switch (role) {
+        case core::fx::TextureRole::Background:
+            return background;
+        case core::fx::TextureRole::Foreground:
+            return foreground;
+        case core::fx::TextureRole::HueRing:
+            return (index >= 0 && static_cast<size_t>(index) < hueRings.size()) ? hueRings[static_cast<size_t>(index)]
+                                                                                 : 0;
+    }
+    return 0;
+}
+
+namespace {
+
+inline void EmitVertex(const core::fx::QuadVertex& v, float batchAlpha) {
+    glColor4f(v.shade, v.shade, v.shade, v.alpha * batchAlpha);
+    glTexCoord2f(v.uv.x, v.uv.y);
+    glVertex2f(v.pos.x, v.pos.y);
+}
+
+inline void EmitMeshVertex(const core::fx::MeshVertex& v, float batchAlpha) {
+    glColor4f(v.shade, v.shade, v.shade, v.alpha * batchAlpha);
+    glTexCoord2f(v.uv.x, v.uv.y);
+    glVertex2f(v.pos.x, v.pos.y);
+}
+
+} // namespace
+
+void ExecuteDrawList(const core::fx::FrameDrawList& list, const EffectTextureTable& textures) {
+    glEnable(GL_TEXTURE_2D);
+
+    for (const auto& batch : list.batches) {
+        const GLuint tex = textures.Resolve(batch.texture, batch.textureIndex);
+        if (tex == 0) continue; // not ready yet (e.g. a HueRing still generating) -- skip silently
+
+        glBindTexture(GL_TEXTURE_2D, tex);
+        const GLenum dstFactor = batch.blend == core::fx::BlendMode::Additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA;
+        glBlendFunc(GL_SRC_ALPHA, dstFactor);
+        glColorMask(batch.colorMask.r, batch.colorMask.g, batch.colorMask.b, GL_TRUE);
+
+        const auto& t = batch.transform;
+        glPushMatrix();
+        glTranslatef(t.pivot.x + t.translate.x, t.pivot.y + t.translate.y, 0.0f);
+        glRotatef(t.rotateRad * kRadToDeg, 0.0f, 0.0f, 1.0f);
+        glScalef(t.scale, t.scale, 1.0f);
+        glTranslatef(-t.pivot.x, -t.pivot.y, 0.0f);
+
+        glBegin(GL_QUADS);
+        if (batch.mesh) {
+            const core::fx::Mesh& mesh = *batch.mesh;
+            for (size_t q = 0; q < mesh.quads.size(); ++q) {
+                if (q < mesh.quadActive.size() && !mesh.quadActive[q]) continue;
+                for (int idx : mesh.quads[q]) {
+                    EmitMeshVertex(mesh.vertices[static_cast<size_t>(idx)], batch.alpha);
+                }
+            }
+        } else if (batch.quads) {
+            for (const auto& v : *batch.quads) {
+                EmitVertex(v, batch.alpha);
+            }
+        }
+        glEnd();
+
+        glPopMatrix();
+    }
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glBindTexture(GL_TEXTURE_2D, 0);
     glDisable(GL_TEXTURE_2D);
 }

@@ -33,4 +33,19 @@ DecodedImage MakeFallbackImage(uint8_t r, uint8_t g, uint8_t b);
 // linear filtering, clamp-to-edge). Returns 0 on failure.
 GLuint CreateTextureFromImage(const DecodedImage& image);
 
+// docs/DESIGN_EFFECTS.md §7.4/§3.2: builds the foreground layer's RGBA
+// texture by copying `image` (the real desktop capture) and zeroing the
+// alpha of every pixel in a grid cell `mask` doesn't flag as differing from
+// the wallpaper. `mask` is gridN*gridN, row-major -- the same layout
+// core::ComputeContentMask/core::BuildParticleGrid use, so a cell's index in
+// `mask` matches its core::Particle's position in the grid. Cell boundaries
+// are `image.width/gridN` x `image.height/gridN`, matching
+// core::ParticleGridConfig exactly (so the alpha edge lines up with each
+// Particle's own u0..v1 rect, §7.4). Returns 0 on failure.
+GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN);
+
+// Uploads a raw RGBA8 buffer directly (§6.2.8's HueRing textures). Same GL
+// texture parameters as CreateTextureFromImage. Returns 0 on failure.
+GLuint CreateTextureFromRgba(int width, int height, const uint8_t* rgba);
+
 } // namespace platform
