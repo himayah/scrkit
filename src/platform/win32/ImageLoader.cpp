@@ -149,15 +149,16 @@ DecodedImage MakeFallbackImage(uint8_t r, uint8_t g, uint8_t b) {
 
 namespace {
 
-GLuint UploadRgbaTexture(int width, int height, const uint8_t* rgba) {
+GLuint UploadRgbaTexture(int width, int height, const uint8_t* rgba, bool nearestFilter = false) {
     if (width <= 0 || height <= 0 || rgba == nullptr) return 0;
 
     GLuint texture = 0;
     glGenTextures(1, &texture);
     if (texture == 0) return 0;
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    const GLint filter = nearestFilter ? GL_NEAREST : GL_LINEAR;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
@@ -200,7 +201,19 @@ GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector
             }
         }
     }
-    return UploadRgbaTexture(image.width, image.height, masked.data());
+    // GL_NEAREST, not GL_LINEAR: this texture has a hard alpha cutoff at
+    // every cell boundary (content cell alpha=255 directly adjacent to a
+    // masked-out cell's alpha=0). Bilinear filtering blends across that
+    // boundary, fading real content toward transparent for about a texel on
+    // either side of every single cell edge -- on a fragment that's shrunk
+    // by an effect (e.g. VortexSuction spiraling into the center), that
+    // texel-wide fringe is a much larger fraction of what's left on screen,
+    // showing up as real content going see-through (user feedback). v1
+    // never had this failure mode since it never baked a hard alpha cutoff
+    // into a shared texture -- it simply didn't draw a quad at all for a
+    // masked-out cell, sampling the *unmasked* capture for the cells it did
+    // draw.
+    return UploadRgbaTexture(image.width, image.height, masked.data(), /*nearestFilter=*/true);
 }
 
 GLuint CreateTextureFromRgba(int width, int height, const uint8_t* rgba) {
