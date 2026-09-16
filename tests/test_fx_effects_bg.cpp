@@ -1,9 +1,12 @@
 #include "test_framework.h"
 
+#include <algorithm>
 #include <cmath>
 
+#include "../src/core/RandomSource.h"
 #include "../src/core/effects/CoverScale.h"
 #include "../src/core/effects/bg/FadeOutIn.h"
+#include "../src/core/effects/bg/GlitchShift.h"
 #include "../src/core/effects/bg/LensDistort.h"
 #include "../src/core/effects/bg/NoiseRipple.h"
 #include "../src/core/effects/bg/ParallaxTilt.h"
@@ -166,3 +169,20 @@ TEST_CASE(WaveZoom_CoverScaleKeepsCenterFixed) {
     CHECK_NEAR(p.x, c.x, 1e-2f);
     CHECK_NEAR(p.y, c.y, 1e-2f);
 }
+
+// ---- GlitchShift (§6.2.9) ---------------------------------------------------
+
+TEST_CASE(GlitchShift_BandsCoverScreenHeightExactlyWithNoGapOrOverlap) {
+    core::Mt19937RandomSource rng(123);
+    const core::fx::GlitchShiftParams params;
+    for (int trial = 0; trial < 20; ++trial) {
+        const auto bands = core::fx::MakeGlitchBands(rng, kH, params, 1.0f, kW);
+        CHECK(!bands.empty());
+        CHECK_NEAR(bands.front().y0, 0.0f, 1e-3f);
+        CHECK_NEAR(bands.back().y1, kH, 1e-3f);
+        for (size_t i = 1; i < bands.size(); ++i) {
+            CHECK_NEAR(bands[i].y0, bands[i - 1].y1, 1e-3f); // no gap, no overlap
+        }
+    }
+}
+

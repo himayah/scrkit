@@ -1,5 +1,7 @@
 #include "test_framework.h"
 
+#include <utility>
+
 #include "../src/core/ParticleGrid.h"
 #include "../src/core/effects/DrawList.h"
 #include "../src/core/effects/EffectRegistry.h"
@@ -97,8 +99,66 @@ TEST_CASE(Invariants_AllForegroundTerminalEffectsCompleteAndDrawNothingWhenFinis
     }
 }
 
+TEST_CASE(Invariants_EveryRegisteredContinuousEffectRunsWithoutCrashing) {
+    // Broad smoke test across every registered Continuous effect (both
+    // layers): Begin() + 3 seconds of Step() at 60fps must not crash and
+    // must leave IsFinished() false throughout (continuous effects never
+    // finish on their own).
+    const std::pair<EffectId, LayerKind> continuousIds[] = {
+        {EffectId::FlagWave, LayerKind::Foreground},
+        {EffectId::NorenSwing, LayerKind::Foreground},
+        {EffectId::InfiniteScroll, LayerKind::Foreground},
+        {EffectId::InfiniteRotation, LayerKind::Foreground},
+        {EffectId::ClothBend, LayerKind::Foreground},
+        {EffectId::LiquidDistort, LayerKind::Foreground},
+        {EffectId::Kaleidoscope, LayerKind::Foreground},
+        {EffectId::SegmentWave, LayerKind::Foreground},
+        {EffectId::Ripple, LayerKind::Background},
+        {EffectId::FadeOutIn, LayerKind::Background},
+        {EffectId::ZoomShake, LayerKind::Background},
+        {EffectId::Tilt, LayerKind::Background},
+        {EffectId::LensDistort, LayerKind::Background},
+        {EffectId::BackgroundKaleidoscope, LayerKind::Background},
+        {EffectId::NoiseRipple, LayerKind::Background},
+        {EffectId::GlitchShift, LayerKind::Background},
+        {EffectId::ParallaxTilt, LayerKind::Background},
+        {EffectId::WaveZoom, LayerKind::Background},
+    };
+    LayerSource fgLayer = MakeLayerSource(LayerKind::Foreground);
+    LayerSource bgLayer = MakeLayerSource(LayerKind::Background);
+
+    for (const auto& [id, kind] : continuousIds) {
+        auto effect = Create(id);
+        CHECK(effect != nullptr);
+        if (!effect) continue;
+
+        LayerSource& layer = kind == LayerKind::Foreground ? fgLayer : bgLayer;
+        EffectContext ctx;
+        ctx.layer = &layer;
+        ctx.screenW = layer.screenW;
+        ctx.screenH = layer.screenH;
+        ctx.seed = 12345;
+        ctx.durationSeconds = 8.0f;
+        effect->Begin(ctx);
+
+        LayerGeometry geometry;
+        EffectFrame frame;
+        frame.suctionCenter = {960.0f, 540.0f};
+        frame.dt = 1.0f / 60.0f;
+        frame.intensity = 0.8f;
+        frame.out = &geometry;
+        for (int i = 0; i < 180; ++i) {
+            frame.t = i * frame.dt;
+            effect->Step(frame);
+        }
+        CHECK(!effect->IsFinished());
+    }
+}
+
 TEST_CASE(Invariants_UnregisteredEffectReturnsNullptr) {
     // Sanity check for Step 9's incremental registration: an id not yet
     // wired up in EffectRegistry::Create must return nullptr, not crash.
-    CHECK(Create(EffectId::GlitchShift) == nullptr);
+    // HueShift is deferred to §16 Step 10 (needs HueRingBuilder's textures
+    // to exist before it can be safely picked at all, §5.5).
+    CHECK(Create(EffectId::HueShift) == nullptr);
 }

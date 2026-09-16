@@ -25,6 +25,10 @@ struct LayerGeometry {
     Transform2D transform;         // overall transform (Transform geometry, or a shared one for Tiles)
     float alpha = 1.0f;
     int textureIndex = 0;          // HueRing index when texture == TextureRole::HueRing
+    // GeometryKind::Bands only (GlitchShift, §6.2.9): half the R/G channel
+    // pixel offset EffectEngine splits into 3 colorMask-restricted batches
+    // around `quads` (0 = no split, drawn as one ordinary batch instead).
+    float bandsRgbSplitPx = 0.0f;
 
     void Clear() {
         mesh = Mesh{};
@@ -32,6 +36,7 @@ struct LayerGeometry {
         transform = Transform2D{};
         alpha = 1.0f;
         textureIndex = 0;
+        bandsRgbSplitPx = 0.0f;
     }
 };
 

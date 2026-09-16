@@ -145,6 +145,27 @@ void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
         crossfadeRestAlpha = u;
     }
 
+    // GeometryKind::Bands (GlitchShift only, §6.2.9) is the one geometry
+    // kind that's inherently 3 batches, not 1: the same band quads drawn 3
+    // times with a colorMask restricting each pass to one channel and a
+    // small +-rgbSplitPx x-offset layered on top of the shared transform.
+    if (rt.current->Geometry() == GeometryKind::Bands) {
+        const float split = rt.geometry.bandsRgbSplitPx;
+        const struct { ColorMask mask; float dx; } passes[3] = {
+            {{true, false, false}, -split}, {{false, true, false}, 0.0f}, {{false, false, true}, split}};
+        for (const auto& pass : passes) {
+            DrawBatch b;
+            b.texture = rt.layer.texture;
+            b.quads = &rt.geometry.quads;
+            b.transform = rt.geometry.transform;
+            b.transform.translate.x += pass.dx;
+            b.colorMask = pass.mask;
+            b.alpha = rt.geometry.alpha * primaryAlphaScale;
+            drawList_.batches.push_back(b);
+        }
+        return; // Bands has no static-match rest form to Crossfade against (Envelope-only, §6.2.9)
+    }
+
     DrawBatch batch;
     batch.texture = rt.layer.texture;
     switch (rt.current->Geometry()) {
@@ -167,7 +188,7 @@ void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
             batch.alpha = rt.geometry.alpha * primaryAlphaScale;
             break;
         case GeometryKind::Tiles:
-        case GeometryKind::Bands:
+        case GeometryKind::Bands: // unreachable (handled above); listed for switch completeness
         case GeometryKind::Fragments:
             batch.quads = &rt.geometry.quads;
             batch.transform = rt.geometry.transform;
