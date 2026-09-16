@@ -75,6 +75,7 @@ target_link_libraries(SpiralSuctionSaver PRIVATE
     user32
     shell32
     comdlg32
+    comctl32
     ole32
     windowscodecs
     advapi32

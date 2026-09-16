@@ -35,6 +35,50 @@ BEGIN
     PUSHBUTTON      "Browse...", IDC_BG_BROWSE_BUTTON, 195, 96, 50, 16
     PUSHBUTTON      "Use system wallpaper", IDC_BG_USE_SYSTEM_BUTTON, 15, 115, 120, 14
 
+    PUSHBUTTON      "Effects...", IDC_EFFECTS_BUTTON, 145, 115, 100, 14
+
     DEFPUSHBUTTON   "OK", IDOK, 130, 145, 55, 16
     PUSHBUTTON      "Cancel", IDCANCEL, 190, 145, 55, 16
+END
+
+// Layer-separated effect system settings (DESIGN_EFFECTS.md §9.5). Opened
+// modally from IDD_SETTINGS's "Effects..." button; edits a working copy of
+// core::fx::EngineConfig that's only written back to the caller's
+// core::ConfigModel on this dialog's own OK (§16 Step 11) -- the outer
+// IDD_SETTINGS dialog still owns the single SaveConfigToFile call.
+IDD_EFFECTS DIALOGEX 0, 0, 280, 230
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Spiral Suction Saver - Effects"
+FONT 9, "MS Shell Dlg"
+BEGIN
+    CONTROL         "Enable layer effects", IDC_FX_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 8, 150, 12
+
+    GROUPBOX        "Timing", -1, 7, 24, 266, 60
+
+    LTEXT           "Foreground effect duration (s) min/max:", -1, 14, 38, 160, 10
+    EDITTEXT        IDC_FX_FG_MIN, 178, 36, 35, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_FX_FG_MAX, 220, 36, 35, 14, ES_AUTOHSCROLL
+
+    LTEXT           "Background effect duration (s) min/max:", -1, 14, 56, 160, 10
+    EDITTEXT        IDC_FX_BG_MIN, 178, 54, 35, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_FX_BG_MAX, 220, 54, 35, 14, ES_AUTOHSCROLL
+
+    LTEXT           "Foreground showcase (s):", -1, 14, 74, 160, 10
+    EDITTEXT        IDC_FX_SHOWCASE, 178, 72, 35, 14, ES_AUTOHSCROLL
+
+    LTEXT           "Foreground effects:", -1, 7, 90, 130, 10
+    CONTROL         "", IDC_FX_FG_LIST, "SysListView32",
+                    LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 7, 101, 128, 90
+
+    LTEXT           "Background effects:", -1, 145, 90, 130, 10
+    CONTROL         "", IDC_FX_BG_LIST, "SysListView32",
+                    LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 145, 101, 128, 90
+
+    LTEXT           "Intensity of selected:", IDC_FX_INTENSITY_LABEL, 7, 196, 90, 10
+    CONTROL         "", IDC_FX_INTENSITY, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 100, 194, 173, 16
+
+    PUSHBUTTON      "Reset to defaults", IDC_FX_DEFAULTS, 7, 210, 90, 14
+
+    DEFPUSHBUTTON   "OK", IDOK, 155, 210, 55, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 215, 210, 55, 14
 END
