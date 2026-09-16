@@ -229,4 +229,10 @@ LayerEffectConfig MakeDefaultForegroundEffectConfig();
 LayerEffectConfig MakeDefaultBackgroundEffectConfig();
 EngineConfig MakeDefaultEngineConfig();
 
+// Looks up id's EffectParams, returning a default-constructed EffectParams
+// (enabled=true, intensity=0.7) if it's missing from the map -- used by both
+// EffectScheduler and EffectEngine so a partially-populated LayerEffectConfig
+// (e.g. hand-built in a test) never crashes on an unlisted id.
+const EffectParams& ParamsFor(const LayerEffectConfig& config, EffectId id);
+
 } // namespace core::fx

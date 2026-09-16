@@ -58,6 +58,14 @@ public:
     // Entering/Running this immediately enters Exiting. See class comment.
     void RequestTerminal();
 
+    // §5.2's "任意 | OnPhaseEntered(BLACK/FADE) | Idle" and
+    // "任意 | OnPhaseEntered(RESET) | Rest" rows: unconditional, from any
+    // state (the caller -- EffectEngine -- calls exactly one of these from
+    // its own OnPhaseEntered whenever the phase machine enters BLACK/FADE or
+    // RESET, per §5.1's OnPhaseEntered table).
+    void ForceIdle();
+    void ForceRest();
+
     FxOutputs Step(const FxInputs& in);
 
     FxState Current() const { return state_; }

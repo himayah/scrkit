@@ -42,4 +42,10 @@ EngineConfig MakeDefaultEngineConfig() {
     return config;
 }
 
+const EffectParams& ParamsFor(const LayerEffectConfig& config, EffectId id) {
+    static const EffectParams kDefault;
+    auto it = config.perEffect.find(id);
+    return it != config.perEffect.end() ? it->second : kDefault;
+}
+
 } // namespace core::fx

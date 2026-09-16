@@ -174,6 +174,21 @@ TEST_CASE(StateMachine_RequestTerminalFromIdleIsImmediateForWaitPolicy) {
     CHECK(sm.Current() == FxState::TerminalRunning);
 }
 
+TEST_CASE(StateMachine_ForceIdleAndForceRestWorkFromAnyState) {
+    EngineConfig engine = MakeDefaultEngineConfig();
+    FixedSequenceRandom rng(std::vector<float>(200, 0.0f));
+    Timeline timeline;
+    EffectStateMachine sm(LayerKind::Foreground, NoCandidatePolicy::ImmediateTerminal, engine, rng, timeline);
+    sm.Reset(EmptyReason::NotEmpty);
+    CHECK(sm.Current() == FxState::Entering);
+
+    sm.ForceIdle();
+    CHECK(sm.Current() == FxState::Idle);
+
+    sm.ForceRest();
+    CHECK(sm.Current() == FxState::Rest);
+}
+
 TEST_CASE(StateMachine_TerminalUnavailableForcesLayerDefault) {
     EngineConfig engine = MakeDefaultEngineConfig();
     engine.enabled = false; // forces nullopt from Pick regardless of kind

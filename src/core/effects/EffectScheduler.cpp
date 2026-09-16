@@ -9,12 +9,6 @@ namespace core::fx {
 
 namespace {
 
-const EffectParams& ParamsFor(const LayerEffectConfig& config, EffectId id) {
-    static const EffectParams kDefault;
-    auto it = config.perEffect.find(id);
-    return it != config.perEffect.end() ? it->second : kDefault;
-}
-
 // §9.2 / §5.5 D-12 & 外部レビュー ISSUE-8: 1. either bound is 0 -> layer
 // default; 2. otherwise Min > Max -> layer default too; evaluated in that
 // order so "0 and Min>Max at once" still resolves to a single well-defined

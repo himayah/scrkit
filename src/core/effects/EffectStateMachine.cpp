@@ -71,6 +71,18 @@ void EffectStateMachine::RequestTerminal() {
     }
 }
 
+void EffectStateMachine::ForceIdle() {
+    state_ = FxState::Idle;
+    elapsedInState_ = 0.0f;
+    envelope_ = 0.0f;
+}
+
+void EffectStateMachine::ForceRest() {
+    state_ = FxState::Rest;
+    elapsedInState_ = 0.0f;
+    envelope_ = 0.0f;
+}
+
 void EffectStateMachine::AdvanceAfterExiting(FxOutputs& out) {
     if (!terminalRequestedFlag_) {
         auto pick = EffectScheduler::Pick(EffectKind::Continuous, layer_, *engine_, timeline_->History(), *rng_,
