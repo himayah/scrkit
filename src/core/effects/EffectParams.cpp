@@ -1,36 +1,26 @@
 #include "EffectParams.h"
 
-#include <cstddef>
+#include "EffectCatalog.h"
 
 namespace core::fx {
 
 namespace {
 
-constexpr EffectId kForegroundCatalog[] = {
-    EffectId::FlagWave,       EffectId::NorenSwing,     EffectId::InfiniteScroll,
-    EffectId::InfiniteRotation, EffectId::ClothBend,    EffectId::LiquidDistort,
-    EffectId::Kaleidoscope,   EffectId::SegmentWave,
-    EffectId::VortexSuction,  EffectId::FragmentFlyAway, EffectId::GlassShatter,
-    EffectId::ConfettiFall,   EffectId::MosaicCollapse,  EffectId::NoiseDissolve,
-};
-
-constexpr EffectId kBackgroundCatalog[] = {
-    EffectId::Ripple,     EffectId::FadeOutIn,  EffectId::ZoomShake,
-    EffectId::Tilt,       EffectId::LensDistort, EffectId::BackgroundKaleidoscope,
-    EffectId::NoiseRipple, EffectId::HueShift,   EffectId::GlitchShift,
-    EffectId::ParallaxTilt, EffectId::WaveZoom,
-    EffectId::BackgroundSuction,
-};
-
-LayerEffectConfig MakeDefaultConfig(const EffectId* ids, size_t count, float intensity,
-                                     float defaultMin, float defaultMax) {
+LayerEffectConfig MakeDefaultConfig(const std::vector<EffectId>& continuous,
+                                     const std::vector<EffectId>& terminal, float intensity, float defaultMin,
+                                     float defaultMax) {
     LayerEffectConfig config;
     config.defaultMinSeconds = defaultMin;
     config.defaultMaxSeconds = defaultMax;
-    for (size_t i = 0; i < count; ++i) {
+    for (EffectId id : continuous) {
         EffectParams params;
         params.intensity = intensity;
-        config.perEffect[ids[i]] = params;
+        config.perEffect[id] = params;
+    }
+    for (EffectId id : terminal) {
+        EffectParams params;
+        params.intensity = intensity;
+        config.perEffect[id] = params;
     }
     return config;
 }
@@ -38,13 +28,11 @@ LayerEffectConfig MakeDefaultConfig(const EffectId* ids, size_t count, float int
 } // namespace
 
 LayerEffectConfig MakeDefaultForegroundEffectConfig() {
-    return MakeDefaultConfig(kForegroundCatalog, sizeof(kForegroundCatalog) / sizeof(kForegroundCatalog[0]),
-                              0.7f, 5.0f, 10.0f);
+    return MakeDefaultConfig(ForegroundContinuousCatalog(), ForegroundTerminalCatalog(), 0.7f, 5.0f, 10.0f);
 }
 
 LayerEffectConfig MakeDefaultBackgroundEffectConfig() {
-    return MakeDefaultConfig(kBackgroundCatalog, sizeof(kBackgroundCatalog) / sizeof(kBackgroundCatalog[0]),
-                              0.6f, 8.0f, 15.0f);
+    return MakeDefaultConfig(BackgroundContinuousCatalog(), BackgroundTerminalCatalog(), 0.6f, 8.0f, 15.0f);
 }
 
 EngineConfig MakeDefaultEngineConfig() {

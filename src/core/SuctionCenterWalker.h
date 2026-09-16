@@ -1,6 +1,8 @@
 #pragma once
 // Random-walk motion for the suction center (要件.txt §4).
 
+#include <cstdint>
+
 #include "SpiralMath.h"
 
 namespace core {
@@ -12,6 +14,15 @@ public:
     virtual ~IRandomSource() = default;
     // Returns a value in [0, 1).
     virtual float NextFloat01() = 0;
+
+    // Raw 32-bit draw (added for docs/DESIGN_EFFECTS.md §5.5 / D-11: used as
+    // a TimelineEntry seed, logged for reproduction -- never for a value
+    // that needs [0,1) uniformity, since the default implementation's
+    // quantization through a float can bias the low bits). The default
+    // implementation is only exact enough for callers that don't care about
+    // full 32-bit uniformity; RandomSource.h's Mt19937RandomSource overrides
+    // it to return the generator's native 32-bit word directly.
+    virtual uint32_t NextUInt32() { return static_cast<uint32_t>(NextFloat01() * 4294967295.0); }
 };
 
 struct WalkerBounds {

@@ -15,6 +15,10 @@ public:
 
     float NextFloat01() override { return dist_(engine_); }
 
+    // Returns the generator's native 32-bit word directly instead of going
+    // through NextFloat01()'s [0,1) quantization (§5.5 / D-11).
+    uint32_t NextUInt32() override { return engine_(); }
+
 private:
     std::mt19937 engine_;
     std::uniform_real_distribution<float> dist_;
