@@ -67,6 +67,18 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         return false;
     }
 
+    // §6.2.8.1: start generating HueShift's hue-rotated copies now, off the
+    // main thread, so they're likely ready well before HueShift could ever
+    // be picked (Effects.Enabled=1's first background cycle is seconds away
+    // at minimum). maxRingBytes matches HueShiftParams::maxRingBytes.
+    for (GLuint tex : hueRingTextures_) {
+        if (tex != 0) glDeleteTextures(1, &tex);
+    }
+    hueRingTextures_.assign(static_cast<size_t>(kHueRingSteps - 1), 0);
+    hueRingBuilder_ = std::make_unique<HueRingBuilder>();
+    hueRingBuilder_->Start(compositedWallpaper.rgba, screenWidth_, screenHeight_, kHueRingSteps,
+                            64ull * 1024 * 1024);
+
     // 2. Particle count: resolve Auto/Custom/preset into a concrete count,
     //    then lay out the NxN grid (要件.txt §5, §6). Both layers' cells
     //    come from this same grid (DESIGN_EFFECTS.md §4.1's LayerSource).
@@ -194,6 +206,17 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 
 void AppController::Shutdown() {
     effectEngine_.reset();
+    // §6.2.8.1: stop/join the worker before tearing down anything it might
+    // still be about to hand a buffer to (its destructor does this too, but
+    // doing it explicitly here keeps shutdown ordering obvious and lets the
+    // ring textures below be deleted only once the thread is truly done).
+    hueRingBuilder_.reset();
+    for (GLuint& tex : hueRingTextures_) {
+        if (tex != 0) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+    }
     if (backgroundTexture_ != 0) {
         glDeleteTextures(1, &backgroundTexture_);
         backgroundTexture_ = 0;
@@ -227,10 +250,26 @@ void AppController::Update(float dtSeconds) {
     center_->Step(*rng_);
     const core::Vec2 centerPos = center_->Position();
 
+    // §7.4: upload at most one completed hue ring to a GL texture per frame
+    // (GL calls stay main-thread-only; the worker only ever produces RGBA
+    // buffers). HueShift is excluded from the scheduler (§5.5) for as long
+    // as hueShiftReady below stays false.
+    if (hueRingBuilder_) {
+        std::vector<uint8_t> ringRgba;
+        int ringIndex = 0, ringW = 0, ringH = 0;
+        if (hueRingBuilder_->TryTakeNextRing(ringRgba, ringIndex, ringW, ringH)) {
+            const size_t slot = static_cast<size_t>(ringIndex - 1);
+            if (slot < hueRingTextures_.size()) {
+                if (hueRingTextures_[slot] != 0) glDeleteTextures(1, &hueRingTextures_[slot]);
+                hueRingTextures_[slot] = CreateTextureFromRgba(ringW, ringH, ringRgba.data());
+            }
+        }
+    }
+
     core::fx::EffectEngine::Inputs fxIn;
     fxIn.dt = dtSeconds;
     fxIn.suctionCenter = {centerPos.x, centerPos.y};
-    fxIn.hueShiftReady = true; // wired for real in §16 Step 10
+    fxIn.hueShiftReady = hueRingBuilder_ && !hueRingBuilder_->IsRunning();
     const core::fx::EffectEngine::Outputs fxOut = effectEngine_->Update(fxIn);
 
     core::StateMachineInputs inputs;
@@ -264,8 +303,7 @@ EffectTextureTable AppController::BuildTextureTable() const {
     EffectTextureTable table;
     table.background = backgroundTexture_;
     table.foreground = foregroundTexture_;
-    // hueRings populated once §16 Step 10 lands; HueShift isn't registered
-    // yet so leaving this empty just means it's never picked (§5.5).
+    table.hueRings = hueRingTextures_;
     return table;
 }
 

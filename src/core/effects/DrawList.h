@@ -29,6 +29,11 @@ struct LayerGeometry {
     // pixel offset EffectEngine splits into 3 colorMask-restricted batches
     // around `quads` (0 = no split, drawn as one ordinary batch instead).
     float bandsRgbSplitPx = 0.0f;
+    // HueShift only (§6.2.8's 2-pass blend): when >= 0, EffectEngine draws a
+    // second batch over the first, same mesh/transform, at HueRing index
+    // textureIndexB with alpha alphaB (0 = no second pass).
+    int textureIndexB = -1;
+    float alphaB = 0.0f;
 
     void Clear() {
         mesh = Mesh{};
@@ -37,6 +42,8 @@ struct LayerGeometry {
         alpha = 1.0f;
         textureIndex = 0;
         bandsRgbSplitPx = 0.0f;
+        textureIndexB = -1;
+        alphaB = 0.0f;
     }
 };
 

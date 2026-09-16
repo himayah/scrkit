@@ -82,8 +82,13 @@ GLuint EffectTextureTable::Resolve(core::fx::TextureRole role, int index) const 
         case core::fx::TextureRole::Foreground:
             return foreground;
         case core::fx::TextureRole::HueRing:
-            return (index >= 0 && static_cast<size_t>(index) < hueRings.size()) ? hueRings[static_cast<size_t>(index)]
-                                                                                 : 0;
+            // §6.2.8: ring[0] *is* the background texture itself (0deg
+            // rotation, never separately generated) -- hueRings[] holds only
+            // the K-1 generated rotations, at index-1.
+            if (index == 0) return background;
+            return (index >= 1 && static_cast<size_t>(index - 1) < hueRings.size())
+                       ? hueRings[static_cast<size_t>(index - 1)]
+                       : 0;
     }
     return 0;
 }

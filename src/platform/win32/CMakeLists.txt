@@ -9,6 +9,7 @@ set(WIN32_SOURCES
     AppPaths.cpp
     ConfigDialogWin32.cpp
     FileLogSink.cpp
+    HueRingBuilder.cpp
     ImageLoader.cpp
     OpenGLContext.cpp
     Renderer.cpp

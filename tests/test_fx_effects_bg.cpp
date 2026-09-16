@@ -7,6 +7,7 @@
 #include "../src/core/effects/CoverScale.h"
 #include "../src/core/effects/bg/FadeOutIn.h"
 #include "../src/core/effects/bg/GlitchShift.h"
+#include "../src/core/effects/bg/HueShift.h"
 #include "../src/core/effects/bg/LensDistort.h"
 #include "../src/core/effects/bg/NoiseRipple.h"
 #include "../src/core/effects/bg/ParallaxTilt.h"
@@ -184,5 +185,34 @@ TEST_CASE(GlitchShift_BandsCoverScreenHeightExactlyWithNoGapOrOverlap) {
             CHECK_NEAR(bands[i].y0, bands[i - 1].y1, 1e-3f); // no gap, no overlap
         }
     }
+}
+
+// ---- HueShift (§6.2.8) ------------------------------------------------------
+
+TEST_CASE(HueShift_SelectHueRingsAtStepBoundaryIsPureIndexA) {
+    const auto sel = core::fx::SelectHueRings(0.0f, 6); // 0deg = exactly ring 0
+    CHECK_EQ(sel.indexA, 0);
+    CHECK_EQ(sel.indexB, 1);
+    CHECK_NEAR(sel.blendB, 0.0f, 1e-4f);
+}
+
+TEST_CASE(HueShift_SelectHueRingsMidwayBetweenStepsBlendsHalfway) {
+    const auto sel = core::fx::SelectHueRings(30.0f, 6); // steps are 60deg apart; 30 is the midpoint of ring 0->1
+    CHECK_EQ(sel.indexA, 0);
+    CHECK_EQ(sel.indexB, 1);
+    CHECK_NEAR(sel.blendB, 0.5f, 1e-4f);
+}
+
+TEST_CASE(HueShift_SelectHueRingsWrapsAroundAt360) {
+    const auto sel = core::fx::SelectHueRings(359.0f, 6); // just before wrapping back to ring 0
+    CHECK_EQ(sel.indexA, 5);
+    CHECK_EQ(sel.indexB, 0); // (5+1) % 6
+}
+
+TEST_CASE(HueShift_SelectHueRingsHandlesNegativeInputGracefully) {
+    const auto selNeg = core::fx::SelectHueRings(-30.0f, 6);
+    const auto selPos = core::fx::SelectHueRings(330.0f, 6); // -30 mod 360 == 330
+    CHECK_EQ(selNeg.indexA, selPos.indexA);
+    CHECK_NEAR(selNeg.blendB, selPos.blendB, 1e-4f);
 }
 

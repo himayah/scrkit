@@ -123,6 +123,7 @@ TEST_CASE(Invariants_EveryRegisteredContinuousEffectRunsWithoutCrashing) {
         {EffectId::GlitchShift, LayerKind::Background},
         {EffectId::ParallaxTilt, LayerKind::Background},
         {EffectId::WaveZoom, LayerKind::Background},
+        {EffectId::HueShift, LayerKind::Background},
     };
     LayerSource fgLayer = MakeLayerSource(LayerKind::Foreground);
     LayerSource bgLayer = MakeLayerSource(LayerKind::Background);
@@ -155,10 +156,11 @@ TEST_CASE(Invariants_EveryRegisteredContinuousEffectRunsWithoutCrashing) {
     }
 }
 
-TEST_CASE(Invariants_UnregisteredEffectReturnsNullptr) {
-    // Sanity check for Step 9's incremental registration: an id not yet
-    // wired up in EffectRegistry::Create must return nullptr, not crash.
-    // HueShift is deferred to §16 Step 10 (needs HueRingBuilder's textures
-    // to exist before it can be safely picked at all, §5.5).
-    CHECK(Create(EffectId::HueShift) == nullptr);
+TEST_CASE(Invariants_AllTwentySixEffectIdsAreRegistered) {
+    // §16 Steps 5-10 registered every EffectId incrementally; this is the
+    // final checkpoint that none was missed once HueShift (the last one,
+    // §6.2.8) landed.
+    for (int i = 0; i < core::fx::kEffectIdCount; ++i) {
+        CHECK(Create(static_cast<EffectId>(i)) != nullptr);
+    }
 }

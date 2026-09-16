@@ -166,6 +166,37 @@ void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
         return; // Bands has no static-match rest form to Crossfade against (Envelope-only, §6.2.9)
     }
 
+    // HueShift (§6.2.8) is the other inherently-multi-batch case: 2 passes
+    // over the *same* rest mesh, differing only in which HueRing texture
+    // index each one binds and how much alpha the second (blend-in) pass
+    // gets -- unlike every other Transform effect, whose single batch
+    // always uses the layer's normal Background/Foreground texture role.
+    if (rt.current->Id() == EffectId::HueShift) {
+        DrawBatch primary;
+        primary.texture = TextureRole::HueRing;
+        primary.textureIndex = rt.geometry.textureIndex;
+        primary.mesh = &rt.layer.restMesh;
+        primary.transform = rt.geometry.transform;
+        primary.alpha = rt.geometry.alpha * primaryAlphaScale;
+        drawList_.batches.push_back(primary);
+
+        if (rt.geometry.textureIndexB >= 0 && rt.geometry.alphaB > 0.0f) {
+            DrawBatch blend = primary;
+            blend.textureIndex = rt.geometry.textureIndexB;
+            blend.alpha = rt.geometry.alphaB * primaryAlphaScale;
+            drawList_.batches.push_back(blend);
+        }
+
+        if (crossfadeRestAlpha > 0.0f) {
+            DrawBatch restBatch;
+            restBatch.texture = rt.layer.texture;
+            restBatch.mesh = &rt.layer.restMesh;
+            restBatch.alpha = crossfadeRestAlpha;
+            drawList_.batches.push_back(restBatch);
+        }
+        return;
+    }
+
     DrawBatch batch;
     batch.texture = rt.layer.texture;
     switch (rt.current->Geometry()) {

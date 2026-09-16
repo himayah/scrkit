@@ -18,6 +18,7 @@
 #include "../../core/StateMachine.h"
 #include "../../core/SuctionCenterWalker.h"
 #include "../../core/effects/EffectEngine.h"
+#include "HueRingBuilder.h"
 #include "ImageLoader.h"
 #include "Renderer.h"
 
@@ -79,6 +80,13 @@ private:
     core::SaverStateMachine stateMachine_;
     core::FadeController fade_{2.0f}; // 2s black->image fade (要件4 step5)
     std::unique_ptr<core::fx::EffectEngine> effectEngine_;
+
+    // §6.2.8/§6.2.8.1: HueShift's pre-generated hue-rotated background
+    // copies. hueRingTextures_[i] holds ring index i+1 (ring 0 is
+    // backgroundTexture_ itself, never separately generated/stored).
+    std::unique_ptr<HueRingBuilder> hueRingBuilder_;
+    std::vector<GLuint> hueRingTextures_;
+    static constexpr int kHueRingSteps = 6; // must match HueShiftParams::steps default
 
     // Half-width/height of every particle quad in pixels, computed once in
     // Initialize() from the grid cell size (screen size / gridN) so

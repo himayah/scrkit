@@ -17,6 +17,7 @@
 #include "bg/BackgroundKaleidoscope.h"
 #include "bg/FadeOutIn.h"
 #include "bg/GlitchShift.h"
+#include "bg/HueShift.h"
 #include "bg/LensDistort.h"
 #include "bg/NoiseRipple.h"
 #include "bg/ParallaxTilt.h"
@@ -83,6 +84,8 @@ std::unique_ptr<IEffect> Create(EffectId id) {
             return std::make_unique<BackgroundKaleidoscopeEffect>();
         case EffectId::GlitchShift:
             return std::make_unique<GlitchShiftEffect>();
+        case EffectId::HueShift:
+            return std::make_unique<HueShiftEffect>();
 
         // The remaining effects (§16 Step 9) are registered here as they
         // land, one fg/*.cpp or bg/*.cpp at a time.
