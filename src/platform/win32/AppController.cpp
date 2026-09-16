@@ -7,7 +7,10 @@
 #include "../../core/ContentMask.h"
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
+#include "AppPaths.h"
+#include "DebugDump.h" // TEMPORARY, see its header comment
 #include "OpenGLContext.h"
+#include "StringConvert.h"
 #include "WallpaperProvider.h"
 
 namespace platform {
@@ -138,6 +141,29 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         }
         core::Logger::Info("AppController: " + std::to_string(contentParticles_.size()) + "/" +
                             std::to_string(particles_.size()) + " grid cell(s) flagged as real desktop content");
+
+        // TEMPORARY diagnostic (see DebugDump.h) for the reported "holes
+        // inside a captured window/icon rectangle" problem: dump the actual
+        // capture, the wallpaper it was compared against, and a magenta-
+        // tinted overlay showing exactly which cells ComputeContentMask
+        // excluded, directly on top of the real pixels -- the same
+        // "look at the actual two images being compared" method that
+        // resolved every earlier content-mask issue (DESIGN.md §9.8).
+        {
+            const std::wstring dir = GetAppDataDirectory();
+            if (!dir.empty()) {
+                WriteDebugBmp(dir + L"\\debug_capture.bmp", desktopCapture->rgba.data(), screenWidth_,
+                              screenHeight_);
+                WriteDebugBmp(dir + L"\\debug_wallpaper.bmp", compositedWallpaper.rgba.data(), screenWidth_,
+                              screenHeight_);
+                const std::vector<uint8_t> overlay = core::BuildDiffOverlayRgba(
+                    desktopCapture->rgba.data(), screenWidth_, screenHeight_, mask, gridN_, 255, 0, 255);
+                WriteDebugBmp(dir + L"\\debug_mask_overlay.bmp", overlay.data(), screenWidth_, screenHeight_);
+                core::Logger::Info("AppController: wrote debug_capture.bmp / debug_wallpaper.bmp / "
+                                    "debug_mask_overlay.bmp (magenta = excluded cells) to " +
+                                    WideToUtf8(dir));
+            }
+        }
     } else if (desktopCapture) {
         core::Logger::Warn("AppController: desktop capture size (" + std::to_string(desktopCapture->width) +
                             "x" + std::to_string(desktopCapture->height) + ") does not match screen (" +

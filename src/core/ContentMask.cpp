@@ -185,4 +185,32 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
     return mask;
 }
 
+std::vector<uint8_t> BuildDiffOverlayRgba(const uint8_t* rgba, int width, int height,
+                                           const std::vector<bool>& mask, int gridN, uint8_t tintR,
+                                           uint8_t tintG, uint8_t tintB) {
+    std::vector<uint8_t> out(static_cast<size_t>(width) * height * 4);
+    if (width <= 0 || height <= 0 || gridN <= 0 || mask.size() < static_cast<size_t>(gridN) * gridN) {
+        return out;
+    }
+    for (int y = 0; y < height; ++y) {
+        const int row = PixelToGridIndex(y, gridN, height);
+        for (int x = 0; x < width; ++x) {
+            const int col = PixelToGridIndex(x, gridN, width);
+            const size_t srcIdx = (static_cast<size_t>(y) * width + x) * 4;
+            uint8_t* dst = &out[srcIdx];
+            if (mask[static_cast<size_t>(row) * gridN + col]) {
+                dst[0] = rgba[srcIdx + 0];
+                dst[1] = rgba[srcIdx + 1];
+                dst[2] = rgba[srcIdx + 2];
+            } else {
+                dst[0] = tintR;
+                dst[1] = tintG;
+                dst[2] = tintB;
+            }
+            dst[3] = 255;
+        }
+    }
+    return out;
+}
+
 } // namespace core
