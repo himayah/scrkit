@@ -100,5 +100,5 @@ TEST_CASE(Invariants_AllForegroundTerminalEffectsCompleteAndDrawNothingWhenFinis
 TEST_CASE(Invariants_UnregisteredEffectReturnsNullptr) {
     // Sanity check for Step 9's incremental registration: an id not yet
     // wired up in EffectRegistry::Create must return nullptr, not crash.
-    CHECK(Create(EffectId::WaveZoom) == nullptr);
+    CHECK(Create(EffectId::GlitchShift) == nullptr);
 }

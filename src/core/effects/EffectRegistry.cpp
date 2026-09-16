@@ -15,8 +15,12 @@
 #include "fg/NorenSwing.h"
 #include "fg/SegmentWave.h"
 #include "bg/FadeOutIn.h"
+#include "bg/LensDistort.h"
+#include "bg/NoiseRipple.h"
 #include "bg/ParallaxTilt.h"
+#include "bg/Ripple.h"
 #include "bg/Tilt.h"
+#include "bg/WaveZoom.h"
 #include "bg/ZoomShake.h"
 
 namespace core::fx {
@@ -65,6 +69,14 @@ std::unique_ptr<IEffect> Create(EffectId id) {
             return std::make_unique<TiltEffect>();
         case EffectId::ParallaxTilt:
             return std::make_unique<ParallaxTiltEffect>();
+        case EffectId::Ripple:
+            return std::make_unique<RippleEffect>();
+        case EffectId::LensDistort:
+            return std::make_unique<LensDistortEffect>();
+        case EffectId::NoiseRipple:
+            return std::make_unique<NoiseRippleEffect>();
+        case EffectId::WaveZoom:
+            return std::make_unique<WaveZoomEffect>();
 
         // The remaining effects (§16 Step 9) are registered here as they
         // land, one fg/*.cpp or bg/*.cpp at a time.

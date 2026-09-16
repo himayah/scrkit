@@ -1,17 +1,33 @@
 #include "test_framework.h"
 
+#include <cmath>
+
 #include "../src/core/effects/CoverScale.h"
 #include "../src/core/effects/bg/FadeOutIn.h"
+#include "../src/core/effects/bg/LensDistort.h"
+#include "../src/core/effects/bg/NoiseRipple.h"
 #include "../src/core/effects/bg/ParallaxTilt.h"
+#include "../src/core/effects/bg/Ripple.h"
 #include "../src/core/effects/bg/Tilt.h"
+#include "../src/core/effects/bg/WaveZoom.h"
 #include "../src/core/effects/bg/ZoomShake.h"
 
 using core::fx::FadeOutInAlpha;
 using core::fx::FadeOutInParams;
+using core::fx::LensDisplace;
+using core::fx::LensDistortParams;
+using core::fx::NoiseRippleDisplace;
+using core::fx::NoiseRippleParams;
 using core::fx::ParallaxTiltParams;
 using core::fx::ParallaxTiltTransform;
+using core::fx::RippleDisplace;
+using core::fx::RippleDrop;
+using core::fx::RippleParams;
 using core::fx::TiltParams;
 using core::fx::TiltTransform;
+using core::fx::Vec2;
+using core::fx::WaveZoomDisplace;
+using core::fx::WaveZoomParams;
 using core::fx::ZoomShakeParams;
 using core::fx::ZoomShakeTransform;
 
@@ -79,4 +95,74 @@ TEST_CASE(ParallaxTilt_ZeroIntensityIsStaticMatch) {
     CHECK_NEAR(t.translate.y, 0.0f, 1e-5f);
     CHECK_NEAR(t.rotateRad, 0.0f, 1e-5f);
     CHECK_NEAR(t.scale, 1.0f, 1e-5f);
+}
+
+// ---- Ripple (§6.2.1) -------------------------------------------------------
+
+TEST_CASE(Ripple_DropBeforeItsSpawnTimeContributesNothing) {
+    const RippleParams params;
+    const std::vector<RippleDrop> drops = {{{960.0f, 540.0f}, 5.0f}}; // spawns at t=5
+    const Vec2 d = RippleDisplace({960.0f, 600.0f}, 2.0f, drops, 1.0f, params); // t=2 < spawnTime
+    CHECK_NEAR(d.x, 0.0f, 1e-6f);
+    CHECK_NEAR(d.y, 0.0f, 1e-6f);
+}
+
+TEST_CASE(Ripple_DecaysTowardsZeroOverTime) {
+    const RippleParams params;
+    const std::vector<RippleDrop> drops = {{{960.0f, 540.0f}, 0.0f}};
+    const Vec2 near = RippleDisplace({960.0f, 600.0f}, 0.3f, drops, 1.0f, params);
+    const Vec2 far = RippleDisplace({960.0f, 600.0f}, 20.0f, drops, 1.0f, params);
+    const float nearMag = std::sqrt(near.x * near.x + near.y * near.y);
+    const float farMag = std::sqrt(far.x * far.x + far.y * far.y);
+    CHECK(farMag < nearMag);
+    CHECK(farMag < 1e-3f); // effectively decayed away after 20s
+}
+
+// ---- LensDistort (§6.2.5) --------------------------------------------------
+
+TEST_CASE(LensDistort_CornersStayFixedForAnyK) {
+    for (float k : {-0.15f, 0.0f, 0.15f}) {
+        const Vec2 corners[4] = {{0, 0}, {kW, 0}, {0, kH}, {kW, kH}};
+        for (const auto& corner : corners) {
+            const Vec2 p = LensDisplace(corner, k, kW, kH);
+            CHECK_NEAR(p.x, corner.x, 1e-2f);
+            CHECK_NEAR(p.y, corner.y, 1e-2f);
+        }
+    }
+}
+
+TEST_CASE(LensDistort_CenterMovesWithK) {
+    const Vec2 c{kW / 2.0f, kH / 2.0f};
+    const Vec2 offCenter{kW / 2.0f + 400.0f, kH / 2.0f};
+    const Vec2 atZero = LensDisplace(offCenter, 0.0f, kW, kH);
+    const Vec2 atPositive = LensDisplace(offCenter, 0.1f, kW, kH);
+    CHECK_NEAR(atZero.x, offCenter.x, 1e-2f); // k=0 is identity
+    CHECK(std::fabs(atPositive.x - c.x) != std::fabs(atZero.x - c.x));
+}
+
+// ---- NoiseRipple (§6.2.7) --------------------------------------------------
+
+TEST_CASE(NoiseRipple_ZeroIntensityIsStaticMatch) {
+    const NoiseRippleParams params;
+    const Vec2 d = NoiseRippleDisplace({700.0f, 300.0f}, 1.5f, 0.0f, params, 3, kW, kH);
+    CHECK_NEAR(d.x, 0.0f, 1e-6f);
+    CHECK_NEAR(d.y, 0.0f, 1e-6f);
+}
+
+// ---- WaveZoom (§6.2.11) -----------------------------------------------------
+
+TEST_CASE(WaveZoom_ZeroIntensityIsStaticMatch) {
+    const WaveZoomParams params;
+    const Vec2 rest{300.0f, 800.0f};
+    const Vec2 p = WaveZoomDisplace(rest, 2.0f, 0.0f, params, true, kW, kH);
+    CHECK_NEAR(p.x, rest.x, 1e-3f);
+    CHECK_NEAR(p.y, rest.y, 1e-3f);
+}
+
+TEST_CASE(WaveZoom_CoverScaleKeepsCenterFixed) {
+    const WaveZoomParams params;
+    const Vec2 c{kW / 2.0f, kH / 2.0f};
+    const Vec2 p = WaveZoomDisplace(c, 0.4f, 1.0f, params, true, kW, kH);
+    CHECK_NEAR(p.x, c.x, 1e-2f);
+    CHECK_NEAR(p.y, c.y, 1e-2f);
 }

@@ -157,7 +157,13 @@ void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
             break;
         case GeometryKind::Mesh:
         case GeometryKind::RadialMesh:
+            // Most Mesh effects bake displacement directly into vertex
+            // positions and leave this at the default identity, but a few
+            // (Ripple, NoiseRipple) also need a coverScale wrapping the
+            // whole mesh to avoid an edge gap (§6.0.4) -- same transform
+            // field, applied the same way as the other geometry kinds.
             batch.mesh = &rt.geometry.mesh;
+            batch.transform = rt.geometry.transform;
             batch.alpha = rt.geometry.alpha * primaryAlphaScale;
             break;
         case GeometryKind::Tiles:
