@@ -88,6 +88,15 @@ TEST_CASE(Invariants_BackgroundSuctionCompletesAndDrawsNothingWhenFinished) {
     RunTerminalEffectAndCheckInvariants(EffectId::BackgroundSuction, LayerKind::Background);
 }
 
+TEST_CASE(Invariants_AllForegroundTerminalEffectsCompleteAndDrawNothingWhenFinished) {
+    // §12.2's terminal-effect table, run generically across every fg
+    // terminal effect registered so far instead of one test case each.
+    for (EffectId id : {EffectId::FragmentFlyAway, EffectId::GlassShatter, EffectId::ConfettiFall,
+                         EffectId::MosaicCollapse, EffectId::NoiseDissolve}) {
+        RunTerminalEffectAndCheckInvariants(id, LayerKind::Foreground);
+    }
+}
+
 TEST_CASE(Invariants_UnregisteredEffectReturnsNullptr) {
     // Sanity check for Step 9's incremental registration: an id not yet
     // wired up in EffectRegistry::Create must return nullptr, not crash.

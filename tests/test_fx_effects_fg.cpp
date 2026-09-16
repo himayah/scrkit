@@ -3,9 +3,12 @@
 #include "../src/core/ParticleGrid.h"
 #include "../src/core/effects/EffectRegistry.h"
 #include "../src/core/effects/fg/ClothBend.h"
+#include "../src/core/effects/fg/ConfettiFall.h"
 #include "../src/core/effects/fg/FlagWave.h"
+#include "../src/core/effects/fg/GlassShatter.h"
 #include "../src/core/effects/fg/InfiniteScroll.h"
 #include "../src/core/effects/fg/LiquidDistort.h"
+#include "../src/core/effects/fg/NoiseDissolve.h"
 #include "../src/core/effects/fg/NorenSwing.h"
 
 using core::fx::ClothBendDisplace;
@@ -208,4 +211,39 @@ TEST_CASE(SegmentWave_AdjacentBandsMoveOppositeDirectionsWhenAlternating) {
     const float band0X = (geometry.quads[0].pos.x + geometry.quads[1].pos.x) / 2.0f - layer.cells[0].x;
     const float band1X = (geometry.quads[32].pos.x + geometry.quads[33].pos.x) / 2.0f - layer.cells[8].x;
     CHECK(band0X * band1X < 0.0f); // opposite signs (alternate=true default)
+}
+
+// ---- GlassShatter (§6.1.9) -------------------------------------------------
+
+TEST_CASE(GlassShatter_AssignShardsPicksNearestSeed) {
+    const std::vector<Vec2> cells = {{0.0f, 0.0f}, {100.0f, 0.0f}, {0.0f, 100.0f}, {90.0f, 90.0f}};
+    const std::vector<Vec2> seeds = {{0.0f, 0.0f}, {100.0f, 100.0f}};
+    const auto assignment = core::fx::AssignShards(cells, seeds);
+    CHECK_EQ(assignment.size(), static_cast<size_t>(4));
+    CHECK_EQ(assignment[0], 0); // (0,0) is exactly seed 0
+    CHECK_EQ(assignment[3], 1); // (90,90) is much closer to seed 1 (100,100)
+}
+
+// ---- ConfettiFall (§6.1.10) ------------------------------------------------
+
+TEST_CASE(ConfettiFall_PositionApproachesTerminalVelocityLine) {
+    core::fx::ConfettiIndividual ind;
+    ind.fallSpeed = 300.0f;
+    ind.swayAmp = 0.0f; // isolate the vertical term
+    const Vec2 rest{500.0f, 0.0f};
+    const Vec2 pAtLargeTau = core::fx::ConfettiPosition(rest, 5.0f, ind);
+    // At large tau the exp(-3*tau) term vanishes, leaving y ~ rest.y + vt*tau - vt/3.
+    const float expectedY = rest.y + ind.fallSpeed * 5.0f - ind.fallSpeed / 3.0f;
+    CHECK_NEAR(pAtLargeTau.y, expectedY, 1.0f);
+}
+
+// ---- NoiseDissolve (§6.1.12) -----------------------------------------------
+
+TEST_CASE(NoiseDissolve_AlphaBoundaryValues) {
+    const float noise = 0.5f, edge = 0.08f;
+    // Fully visible well before the fade band, fully gone at/after threshold.
+    CHECK_NEAR(core::fx::DissolveAlpha(noise, 0.0f, edge), 1.0f, 1e-3f);
+    CHECK_NEAR(core::fx::DissolveAlpha(noise, noise, edge), 0.0f, 1e-3f); // tau == noise01 -> already gone
+    // The smoothstep midpoint sits half an edge-width before the threshold.
+    CHECK_NEAR(core::fx::DissolveAlpha(noise, noise - edge / 2.0f, edge), 0.5f, 1e-3f);
 }

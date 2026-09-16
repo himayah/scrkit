@@ -2,11 +2,16 @@
 
 #include "SuctionEffect.h"
 #include "fg/ClothBend.h"
+#include "fg/ConfettiFall.h"
 #include "fg/FlagWave.h"
+#include "fg/FragmentFlyAway.h"
+#include "fg/GlassShatter.h"
 #include "fg/InfiniteRotation.h"
 #include "fg/InfiniteScroll.h"
 #include "fg/Kaleidoscope.h"
 #include "fg/LiquidDistort.h"
+#include "fg/MosaicCollapse.h"
+#include "fg/NoiseDissolve.h"
 #include "fg/NorenSwing.h"
 #include "fg/SegmentWave.h"
 
@@ -38,6 +43,16 @@ std::unique_ptr<IEffect> Create(EffectId id) {
             return std::make_unique<KaleidoscopeEffect>();
         case EffectId::SegmentWave:
             return std::make_unique<SegmentWaveEffect>();
+        case EffectId::FragmentFlyAway:
+            return std::make_unique<FragmentFlyAwayEffect>();
+        case EffectId::GlassShatter:
+            return std::make_unique<GlassShatterEffect>();
+        case EffectId::ConfettiFall:
+            return std::make_unique<ConfettiFallEffect>();
+        case EffectId::MosaicCollapse:
+            return std::make_unique<MosaicCollapseEffect>();
+        case EffectId::NoiseDissolve:
+            return std::make_unique<NoiseDissolveEffect>();
 
         // The remaining effects (§16 Step 9) are registered here as they
         // land, one fg/*.cpp or bg/*.cpp at a time.
