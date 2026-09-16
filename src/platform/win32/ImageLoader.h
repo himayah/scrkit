@@ -39,9 +39,11 @@ GLuint CreateTextureFromImage(const DecodedImage& image);
 // the wallpaper. `mask` is gridN*gridN, row-major -- the same layout
 // core::ComputeContentMask/core::BuildParticleGrid use, so a cell's index in
 // `mask` matches its core::Particle's position in the grid. Cell boundaries
-// are `image.width/gridN` x `image.height/gridN`, matching
-// core::ParticleGridConfig exactly (so the alpha edge lines up with each
-// Particle's own u0..v1 rect, §7.4). Returns 0 on failure.
+// use the same "(index*count)/total" formula as core::ComputeContentMask
+// (NOT a fixed image.width/gridN cell width, which drifts from the mask's
+// actual boundaries whenever width isn't an exact multiple of gridN -- see
+// the .cpp), so the alpha edge lines up with each Particle's own u0..v1
+// rect (§7.4). Returns 0 on failure.
 GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN);
 
 // Uploads a raw RGBA8 buffer directly (§6.2.8's HueRing textures). Same GL

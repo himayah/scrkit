@@ -6,6 +6,7 @@
 #include <initguid.h>
 #include <wincodec.h>
 
+#include "../../core/ContentMask.h"
 #include "../../core/Logger.h"
 
 namespace platform {
@@ -182,14 +183,18 @@ GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector
     }
 
     std::vector<uint8_t> masked = image.rgba; // copy: never mutate the caller's capture buffer
-    const int cellW = image.width / gridN;
-    const int cellH = image.height / gridN;
+    // Cell boundaries must match core::ComputeContentMask's exactly, via the
+    // shared core::PixelToGridIndex -- NOT a fixed truncated cellW =
+    // width/gridN, which drifts from the mask's actual per-cell boundaries
+    // by a growing number of pixels whenever width isn't an exact multiple
+    // of gridN (true for essentially every real screen resolution, e.g.
+    // 1920/54). That drift is exactly what showed up as wrongly-transparent/
+    // wrongly-opaque areas not lining up with real content (user feedback:
+    // empty areas getting captured, parts of windows going transparent).
     for (int y = 0; y < image.height; ++y) {
-        int row = y / (cellH > 0 ? cellH : 1);
-        if (row >= gridN) row = gridN - 1; // last row/col absorb the width/height%gridN remainder
+        const int row = core::PixelToGridIndex(y, gridN, image.height);
         for (int x = 0; x < image.width; ++x) {
-            int col = x / (cellW > 0 ? cellW : 1);
-            if (col >= gridN) col = gridN - 1;
+            const int col = core::PixelToGridIndex(x, gridN, image.width);
             if (!mask[static_cast<size_t>(row) * gridN + col]) {
                 masked[(static_cast<size_t>(y) * image.width + x) * 4 + 3] = 0;
             }

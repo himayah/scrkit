@@ -19,6 +19,31 @@ namespace core {
 // the real-desktop capture before diffing them.
 void ResampleRgba(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH);
 
+// Which of `gridN` evenly-distributed cells covering [0, totalSize) a given
+// pixel coordinate falls into -- the exact inverse of the cell-boundary
+// convention core::ComputeContentMask uses internally (cell k spans
+// [k*totalSize/gridN, (k+1)*totalSize/gridN)), so callers elsewhere that
+// need to know "which ComputeContentMask cell is this pixel in" (e.g.
+// platform::CreateMaskedTextureFromImage) get boundaries that line up
+// exactly instead of drifting from a naively fixed totalSize/gridN cell
+// width (which isn't the same partition whenever totalSize isn't an exact
+// multiple of gridN -- true for essentially every real screen resolution).
+inline int PixelToGridIndex(int pixel, int gridN, int totalSize) {
+    if (gridN <= 1 || totalSize <= 0) return 0;
+    int index = (pixel * gridN) / totalSize;
+    if (index < 0) index = 0;
+    if (index >= gridN) index = gridN - 1;
+    // The direct inverse can undershoot by exactly 1 at some cell boundaries
+    // (integer double-flooring: floor(pixel*gridN/totalSize) isn't always
+    // the same cell as the one whose own floor(col*totalSize/gridN) bound
+    // actually contains `pixel`). Since the true answer is never more than
+    // 1 above this estimate, one corrective step is sufficient and exact.
+    if (index + 1 < gridN && ((index + 1) * totalSize) / gridN <= pixel) {
+        ++index;
+    }
+    return index;
+}
+
 struct ContentMaskConfig {
     int screenWidth = 1920;
     int screenHeight = 1080;

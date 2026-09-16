@@ -4,6 +4,7 @@
 
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
+using core::PixelToGridIndex;
 using core::ResampleRgba;
 
 namespace {
@@ -274,4 +275,49 @@ TEST_CASE(ResampleRgba_DownscaleProducesRequestedSize) {
         CHECK_EQ(dst[i + 1], static_cast<uint8_t>(6));
         CHECK_EQ(dst[i + 2], static_cast<uint8_t>(7));
     }
+}
+
+// PixelToGridIndex must agree exactly with ComputeContentMask's own
+// [k*totalSize/gridN, (k+1)*totalSize/gridN) cell boundaries -- this is the
+// property platform::CreateMaskedTextureFromImage depends on to zero alpha
+// on exactly the same cells ComputeContentMask flagged (a real bug: a fixed
+// truncated cellW = totalSize/gridN drifted from these boundaries by a
+// growing number of pixels whenever totalSize wasn't an exact multiple of
+// gridN -- true for almost every real screen width/gridN combination).
+TEST_CASE(PixelToGridIndex_AgreesWithComputeContentMaskCellBoundariesForEveryPixel) {
+    const int widths[] = {1920, 2560, 3840, 1366};
+    const int gridNs[] = {31, 54, 77, 109}; // sqrt(1000/3000/6000/12000) particle presets
+    for (int width : widths) {
+        for (int gridN : gridNs) {
+            for (int x = 0; x < width; ++x) {
+                const int col = PixelToGridIndex(x, gridN, width);
+                const int x0 = (col * width) / gridN;         // ComputeContentMask's own cell start
+                const int x1 = ((col + 1) * width) / gridN;    // ComputeContentMask's own cell end
+                CHECK(x >= x0);
+                CHECK(x < x1);
+            }
+        }
+    }
+}
+
+TEST_CASE(PixelToGridIndex_CoversEveryCellAcrossTheFullRange) {
+    // No cell should be unreachable (e.g. the old fixed-cellW bug dumped the
+    // whole remainder into the last cell instead of distributing it).
+    const int width = 1920, gridN = 54;
+    std::vector<bool> hit(static_cast<size_t>(gridN), false);
+    for (int x = 0; x < width; ++x) hit[static_cast<size_t>(PixelToGridIndex(x, gridN, width))] = true;
+    for (bool h : hit) CHECK(h);
+}
+
+TEST_CASE(PixelToGridIndex_LastCellIsNotAbnormallyWide) {
+    // Regression check for the specific old bug: the last column absorbing
+    // the entire width%gridN remainder (e.g. 30px too wide at 1920/54)
+    // instead of the remainder being spread one extra pixel per cell.
+    const int width = 1920, gridN = 54;
+    int lastCellWidth = 0;
+    for (int x = 0; x < width; ++x) {
+        if (PixelToGridIndex(x, gridN, width) == gridN - 1) ++lastCellWidth;
+    }
+    const int nominalCellWidth = width / gridN; // 35
+    CHECK(lastCellWidth <= nominalCellWidth + 1);
 }
