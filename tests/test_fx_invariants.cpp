@@ -91,5 +91,5 @@ TEST_CASE(Invariants_BackgroundSuctionCompletesAndDrawsNothingWhenFinished) {
 TEST_CASE(Invariants_UnregisteredEffectReturnsNullptr) {
     // Sanity check for Step 9's incremental registration: an id not yet
     // wired up in EffectRegistry::Create must return nullptr, not crash.
-    CHECK(Create(EffectId::FlagWave) == nullptr);
+    CHECK(Create(EffectId::WaveZoom) == nullptr);
 }

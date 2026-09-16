@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "EffectRegistry.h"
+#include "ForegroundMeshBuilder.h"
 
 namespace core::fx {
 
@@ -18,20 +19,9 @@ EffectEngine::EffectEngine(const EngineConfig& config, core::IRandomSource& rng)
 void EffectEngine::SetLayers(LayerSource foreground, LayerSource background) {
     // Foreground rest mesh: gridN x gridN diff mask, subdivided into
     // cellSubdiv x cellSubdiv child quads per parent cell when gridN < 48
-    // (§4.4.1 / D-20).
-    {
-        std::vector<bool> activeCells(static_cast<size_t>(foreground.gridN) * foreground.gridN, false);
-        for (int idx : foreground.cellIndices) {
-            if (idx >= 0 && static_cast<size_t>(idx) < activeCells.size()) {
-                activeCells[static_cast<size_t>(idx)] = true;
-            }
-        }
-        const int cellSubdiv =
-            foreground.gridN < 48 ? static_cast<int>(std::ceil(48.0 / foreground.gridN)) : 1;
-        const int cols = foreground.gridN * cellSubdiv;
-        foreground.restMesh =
-            MeshBuilder::BuildGrid(foreground.screenW, foreground.screenH, cols, cols, {}, activeCells, cellSubdiv);
-    }
+    // (§4.4.1 / D-20). No seams -- NorenSwing (§6.1.2) builds its own mesh
+    // with strip-boundary seams separately, via the same helper.
+    foreground.restMesh = BuildForegroundRestMesh(foreground);
     // Background rest mesh: fixed ~20px grid, independent of particle count (D-6).
     {
         const int cols = static_cast<int>(std::ceil(background.screenW / 20.0f));
