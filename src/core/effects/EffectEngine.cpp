@@ -107,6 +107,7 @@ void EffectEngine::SyncCurrentEffectFromTimeline(LayerRuntime& rt, const LayerEf
         ctx.screenW = rt.layer.screenW;
         ctx.screenH = rt.layer.screenH;
         ctx.seed = entry->seed;
+        ctx.durationSeconds = entry->durationSeconds;
         rt.current->Begin(ctx);
     }
     // Create() returning nullptr just means this EffectId isn't registered

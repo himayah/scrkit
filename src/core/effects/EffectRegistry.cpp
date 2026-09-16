@@ -14,6 +14,10 @@
 #include "fg/NoiseDissolve.h"
 #include "fg/NorenSwing.h"
 #include "fg/SegmentWave.h"
+#include "bg/FadeOutIn.h"
+#include "bg/ParallaxTilt.h"
+#include "bg/Tilt.h"
+#include "bg/ZoomShake.h"
 
 namespace core::fx {
 
@@ -53,6 +57,14 @@ std::unique_ptr<IEffect> Create(EffectId id) {
             return std::make_unique<MosaicCollapseEffect>();
         case EffectId::NoiseDissolve:
             return std::make_unique<NoiseDissolveEffect>();
+        case EffectId::FadeOutIn:
+            return std::make_unique<FadeOutInEffect>();
+        case EffectId::ZoomShake:
+            return std::make_unique<ZoomShakeEffect>();
+        case EffectId::Tilt:
+            return std::make_unique<TiltEffect>();
+        case EffectId::ParallaxTilt:
+            return std::make_unique<ParallaxTiltEffect>();
 
         // The remaining effects (§16 Step 9) are registered here as they
         // land, one fg/*.cpp or bg/*.cpp at a time.

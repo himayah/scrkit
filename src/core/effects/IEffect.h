@@ -22,6 +22,14 @@ struct EffectContext {
     // this) to construct the effect's own core::Mt19937RandomSource -- see
     // the determinism contract in IEffect::Begin's doc comment below (D-11).
     uint32_t seed = 0;
+    // This instance's picked Running-phase duration (TimelineEntry::
+    // durationSeconds, §5.5). Not in the doc's original EffectContext sketch
+    // -- added because FadeOutIn (§6.2.2) needs "how long will I run" to
+    // compute its out/hold/in phase fractions, and nothing else exposes
+    // that to an effect (EffectStateMachine keeps it private). Meaningless
+    // for Terminal effects (duration there is governed by IsFinished()/
+    // terminalMaxSeconds instead, not a fixed T).
+    float durationSeconds = 0.0f;
 };
 
 struct EffectFrame {
