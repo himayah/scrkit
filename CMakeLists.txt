@@ -10,7 +10,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # sense on Windows.
 option(BUILD_CORE_TESTS_ONLY "Build only src/core and its unit tests (no Win32 target)" OFF)
 
-file(GLOB CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.cpp)
+file(GLOB CORE_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/src/core/*.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/effects/*.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/effects/fg/*.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/effects/bg/*.cpp)
 add_library(spiral_core STATIC ${CORE_SOURCES})
 target_include_directories(spiral_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 

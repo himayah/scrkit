@@ -1,0 +1,55 @@
+**目的**  
+既存の Spiral Suction Saver（DESIGN.md / README.md）を拡張し、  
+背景レイヤーと上物レイヤーを完全に分離し、それぞれに多数のアニメーションエフェクトを  
+ランダム切替で適用する新機能を追加する。  
+実装には進まず、第三者が実装できるレベルの詳細な設計書（拡張版 DESIGN.md）を生成すること。
+
+**追加エフェクト（上物レイヤー）**  
+以下のエフェクトを 5〜10秒ランダム切替で適用する：
+
+- FlagWave（旗のはためき）  
+- NorenSwing（暖簾の揺らめき）  
+- InfiniteScroll（無限スクロール）  
+- InfiniteRotation（無限回転）  
+- VortexSuction（渦吸い込み）  
+- FragmentFlyAway（断片飛散）  
+- ClothBend（布のようにたわむ）  
+- LiquidDistort（液体のように揺れる）  
+- GlassShatter（ガラス破片化）  
+- ConfettiFall（紙吹雪）  
+- MosaicCollapse（モザイク崩壊）  
+- NoiseDissolve（ノイズ溶解）  
+- Kaleidoscope（万華鏡反射）  
+- SegmentWave（分割波打ち）
+
+**追加エフェクト（背景レイヤー）**  
+以下のエフェクトを独立した状態機械でランダム切替する：
+
+- Ripple（波紋）  
+- FadeOut / FadeIn  
+- ZoomShake（拡大縮小振動）  
+- Tilt（傾き）  
+- LensDistort（レンズ歪み）  
+- BackgroundKaleidoscope（万華鏡背景）  
+- NoiseRipple（ノイズ波紋）  
+- HueShift（色相サイクル）  
+- GlitchShift（グリッチ）  
+- ParallaxTilt（パララックス揺れ）  
+- WaveZoom（波打つズーム）
+
+**設計書に必ず含める内容**  
+- 新規モジュール（EffectEngine / MeshDeformer / TileMapper / FragmentSystem / NoiseField など）  
+- ForegroundEffectStateMachine / BackgroundEffectStateMachine の状態遷移図  
+- 各エフェクトの数学モデル（純粋関数でテスト可能）  
+- データモデル（EffectParams / Mesh / Fragment / Timeline）  
+- 描画パイプライン（OpenGL 固定機能でのメッシュ変形・タイル連結・断片描画）  
+- 設定ファイル拡張（エフェクト ON/OFF、強度、持続時間）  
+- テスト方針（core の純粋関数テスト）  
+- 既存アーキテクチャとの整合性  
+- 将来拡張ポイント（エフェクト追加のための抽象化）
+
+**出力形式**  
+- 1つの巨大な Markdown 設計書（拡張版 DESIGN.md）  
+- 既存 DESIGN.md と同じ文体・粒度・構成  
+- Mermaid 図を積極的に使用  
+- 実装コードは書かない（インタフェース定義・擬似コードは可）
