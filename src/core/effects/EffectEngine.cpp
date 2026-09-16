@@ -1,5 +1,6 @@
 #include "EffectEngine.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "EffectRegistry.h"
@@ -44,7 +45,13 @@ void EffectEngine::UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerC
         fxIn.currentExitStrategy = rt.current->Exit();
     }
 
+    const FxState beforeState = rt.sm->Current();
     const FxOutputs fxOut = rt.sm->Step(fxIn);
+    const FxState afterStep = rt.sm->Current();
+
+    if (afterStep == FxState::Exiting) {
+        rt.exitingElapsedSeconds = beforeState == FxState::Exiting ? rt.exitingElapsedSeconds + in.dt : 0.0f;
+    }
 
     if (fxOut.enteredExiting && rt.current) {
         rt.current->RequestExit(config_.transitionSeconds);
@@ -111,10 +118,9 @@ void EffectEngine::SyncCurrentEffectFromTimeline(LayerRuntime& rt, const LayerEf
 void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
     const FxState state = rt.sm->Current();
 
-    DrawBatch batch;
-    batch.texture = rt.layer.texture;
-
     if (state == FxState::Idle || state == FxState::Rest) {
+        DrawBatch batch;
+        batch.texture = rt.layer.texture;
         batch.mesh = &rt.layer.restMesh;
         drawList_.batches.push_back(batch);
         return;
@@ -123,28 +129,53 @@ void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
         return;
     }
 
+    // Crossfade exit (§5.2): the one exit strategy needing two batches from
+    // a single layer in the same frame -- the effect's own batch fading out
+    // against the layer's plain rest-mesh batch fading in, since a
+    // Crossfade-exit effect (Kaleidoscope, InfiniteRotation, HueShift) can't
+    // reach its own rest pose by animating its own geometry (§6.1.13).
+    float primaryAlphaScale = 1.0f;
+    float crossfadeRestAlpha = 0.0f;
+    if (state == FxState::Exiting && rt.current->Exit() == ExitStrategy::Crossfade) {
+        const float u = config_.transitionSeconds > 1e-4f
+                            ? std::min(1.0f, rt.exitingElapsedSeconds / config_.transitionSeconds)
+                            : 1.0f;
+        primaryAlphaScale = 1.0f - u;
+        crossfadeRestAlpha = u;
+    }
+
+    DrawBatch batch;
+    batch.texture = rt.layer.texture;
     switch (rt.current->Geometry()) {
         case GeometryKind::Transform:
             // Whole-layer rigid transform: reuse the layer's own rest
             // geometry, just with the effect's transform/alpha applied.
             batch.mesh = &rt.layer.restMesh;
             batch.transform = rt.geometry.transform;
-            batch.alpha = rt.geometry.alpha;
+            batch.alpha = rt.geometry.alpha * primaryAlphaScale;
             break;
         case GeometryKind::Mesh:
         case GeometryKind::RadialMesh:
             batch.mesh = &rt.geometry.mesh;
-            batch.alpha = rt.geometry.alpha;
+            batch.alpha = rt.geometry.alpha * primaryAlphaScale;
             break;
         case GeometryKind::Tiles:
         case GeometryKind::Bands:
         case GeometryKind::Fragments:
             batch.quads = &rt.geometry.quads;
             batch.transform = rt.geometry.transform;
-            batch.alpha = rt.geometry.alpha;
+            batch.alpha = rt.geometry.alpha * primaryAlphaScale;
             break;
     }
     drawList_.batches.push_back(batch);
+
+    if (crossfadeRestAlpha > 0.0f) {
+        DrawBatch restBatch;
+        restBatch.texture = rt.layer.texture;
+        restBatch.mesh = &rt.layer.restMesh;
+        restBatch.alpha = crossfadeRestAlpha;
+        drawList_.batches.push_back(restBatch);
+    }
 }
 
 EffectEngine::Outputs EffectEngine::Update(const Inputs& in) {
@@ -170,8 +201,9 @@ void EffectEngine::OnPhaseEntered(core::SaverState phase) {
             break;
         case SaverState::STATE_BACKGROUND:
             bgSM_.RequestTerminal();
-            if (bgSM_.Current() == FxState::Exiting && bg_.current) {
-                bg_.current->RequestExit(config_.transitionSeconds);
+            if (bgSM_.Current() == FxState::Exiting) {
+                bg_.exitingElapsedSeconds = 0.0f; // synchronous transition, not seen by UpdateLayer's before/after check
+                if (bg_.current) bg_.current->RequestExit(config_.transitionSeconds);
             }
             break;
         case SaverState::STATE_BLACK:

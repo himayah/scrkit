@@ -22,9 +22,11 @@ struct LayerSource {
     float cellHalfW = 0.0f;
     float cellHalfH = 0.0f;
     Mesh restMesh;
-    Mesh restRadialMesh;      // lazily built; only needed by Kaleidoscope effects
-    bool restRadialMeshBuilt = false;
-    bool empty = false;       // Foreground only: true iff emptyReason != NotEmpty
+    // No restRadialMesh field: EffectContext only exposes LayerSource by
+    // const pointer, so Kaleidoscope/BackgroundKaleidoscope each build and
+    // own their own radial mesh in Begin() instead (like NorenSwing's own
+    // seamed mesh, §6.1.2) rather than lazily populating a shared one here.
+    bool empty = false; // Foreground only: true iff emptyReason != NotEmpty
     EmptyReason emptyReason = EmptyReason::NotEmpty;
 };
 

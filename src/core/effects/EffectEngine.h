@@ -70,6 +70,13 @@ private:
         // SyncCurrentEffectFromTimeline's comment).
         bool hasAppliedEntry = false;
         uint32_t lastAppliedSeed = 0;
+        // Seconds since this layer's current effect entered Exiting, reset
+        // whenever it *becomes* Exiting. Only meaningful (and only tracked)
+        // for a Crossfade-exit effect (§5.2): AppendDrawBatch uses it to
+        // blend the effect's own batch out against a second rest-mesh batch
+        // fading in, since Crossfade is the one exit strategy that needs two
+        // DrawBatches from a single layer in the same frame.
+        float exitingElapsedSeconds = 0.0f;
     };
 
     void UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerConfig, const Inputs& in, bool& consumedOut);
