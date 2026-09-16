@@ -5,6 +5,11 @@
 すべて吸い込まれると画面が黒くなり、元の壁紙へフェードインして最初の状態に戻る
 （無限ループ）動作をします。
 
+上物(アイコン・タスクバー等の差分ブロック)と背景(壁紙)は独立した2つのレイヤーとして扱われ、
+らせん吸い込みで消える前に、それぞれ専用のエフェクト(上物14種・背景11種)がランダムに
+切り替わりながら演出します。詳細は [レイヤー分離エフェクトシステム](#レイヤー分離エフェクトシステム)
+を参照してください。
+
 > **注記**: 本ソフトウェアおよび付随するドキュメントは AI (Claude Code) によるコーディングで
 > 作成されました。フルスクリーン実行時 (`/s`) は、開始直後に画面全体を1回だけ**読み取り専用で**
 > キャプチャ (`BitBlt`) し、これと現在の壁紙画像を比較して「実際に何か描かれている箇所
@@ -38,6 +43,30 @@
 - 粒子数は設定画面から Low(1,000) / Mid(3,000) / High(6,000) / Max(12,000) / Auto(GPU自動判定)
   / Custom(任意の値) から選択できます。
 
+## レイヤー分離エフェクトシステム
+
+差分ブロック(上物)と壁紙(背景)は完全に独立した2つのレイヤーとして扱われ、らせん吸い込みで
+消滅する前に、それぞれ専用の演出エフェクトを 5〜15 秒程度でランダムに切り替えながら表示
+します(固定機能 OpenGL 1.1 のみで実装、シェーダ不使用)。
+
+- **上物レイヤー(差分ブロック)**: 継続演出 8 種(FlagWave / NorenSwing / InfiniteScroll /
+  InfiniteRotation / ClothBend / LiquidDistort / Kaleidoscope / SegmentWave)を巡回した後、
+  終端演出 6 種(VortexSuction / FragmentFlyAway / GlassShatter / ConfettiFall /
+  MosaicCollapse / NoiseDissolve)のいずれかで消滅します。
+- **背景レイヤー(壁紙)**: 環境演出 10 種(Ripple / FadeOutIn / ZoomShake / Tilt /
+  LensDistort / BackgroundKaleidoscope / NoiseRipple / HueShift / GlitchShift /
+  ParallaxTilt)を独立した状態機械で巡回し、上物が消えると既存のらせん吸い込み
+  (WaveZoom 等の環境演出を終えた後)で終端します。
+- 設定画面の「Effects...」ボタンから、エフェクト全体の有効/無効・各層のショーケース時間・
+  個々のエフェクトの有効/無効と強度を調整できます。エフェクトごとの重み(`Weight`)・
+  持続時間の個別上書き(`MinSeconds`/`MaxSeconds`)・再生順序の固定(`Sequence`)は
+  `config.ini` の直接編集でのみ設定できます(詳細は
+  [`docs/DESIGN_EFFECTS.md` §9](docs/DESIGN_EFFECTS.md)を参照)。
+- `Effects.Enabled=0` にすると、エフェクトシステムを完全に無効化し、拡張前の吸い込み
+  アニメーション(v1)と同じ見た目に戻せます。
+- 設計・実装の詳細(数式・状態遷移・テスト方針)は
+  [`docs/DESIGN_EFFECTS.md`](docs/DESIGN_EFFECTS.md) を参照してください。
+
 ## 技術的特徴
 
 - **言語/API**: C++17、Win32 API、OpenGL 1.1 固定機能パイプライン (`glBegin`/`glEnd`)。
@@ -58,9 +87,11 @@
 - **らせん軌道の演出**: 背景粒子は中心に近づくほど角速度が上乗せされる
   (`SpiralParams::centerAccelFactor`) ため、吸い込まれる画像がらせん状に歪んで見えます。
 - **設定の保存**: レジストリではなく `%APPDATA%\SpiralSuctionSaver\config.ini` に保存します。
-- **アーキテクチャ**: 純粋ロジック (`src/core/`) と Win32/OpenGL 実装 (`src/platform/win32/`) を
-  分離しており、`src/core/` は Windows 非依存の C++17 のみで書かれているため Linux 上でも
-  ビルド・単体テストできます。詳細は [`docs/DESIGN.md`](docs/DESIGN.md) を参照してください。
+- **アーキテクチャ**: 純粋ロジック (`src/core/`、エフェクトシステムは `src/core/effects/`) と
+  Win32/OpenGL 実装 (`src/platform/win32/`) を分離しており、`src/core/` は Windows 非依存の
+  C++17 のみで書かれているため Linux 上でもビルド・単体テストできます。詳細は
+  [`docs/DESIGN.md`](docs/DESIGN.md)(全体設計)・[`docs/DESIGN_EFFECTS.md`](docs/DESIGN_EFFECTS.md)
+  (エフェクトシステム拡張)を参照してください。
 
 ```mermaid
 stateDiagram-v2
@@ -300,6 +331,11 @@ System32 の権限を緩めている間はセキュリティ上のリスクが�
   表示されます。背景画像は既定で現在の壁紙が使われますが、「Browse...」から任意の画像に
   変更するか、「Use system wallpaper」で自動取得に戻せます。設定は OK を押すと
   `%APPDATA%\SpiralSuctionSaver\config.ini` に保存されます。
+- **「Effects...」ボタン**: レイヤー分離エフェクトシステム専用の設定ダイアログを開きます。
+  エフェクト全体の有効/無効、上物・背景それぞれの演出時間(最小/最大秒数)と上物の
+  ショーケース時間、上物 14 種・背景 11 種それぞれの一覧(チェックボックスで有効/無効)と
+  選択中エフェクトの強度スライダーを設定できます。「Reset to defaults」で既定値に戻せます。
+  こちらの OK/Cancel は親ダイアログの OK を押したときにまとめて保存されます。
 
 ## 終了方法
 
@@ -322,8 +358,9 @@ System32 の権限を緩めている間はセキュリティ上のリスクが�
 
 ## テスト
 
-`src/core/` の各モジュールに対する単体テストが `tests/` にあります（外部依存ゼロの自作
-テストハーネス使用）。実行方法は [依存ライブラリとインストール手順](#依存ライブラリとインストール手順)
+`src/core/`(エフェクトシステムの `src/core/effects/` を含む)の各モジュールに対する単体
+テストが `tests/` にあります（外部依存ゼロの自作テストハーネス使用、現在 193 ケース）。
+実行方法は [依存ライブラリとインストール手順](#依存ライブラリとインストール手順)
 の「コアロジックの単体テストのみをビルド」を参照してください。
 
 Windows 実機での結合テスト用チェックリストは [`docs/DESIGN.md`](docs/DESIGN.md#83-手動確認チェックリスト-windows実機)

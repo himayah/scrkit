@@ -3,6 +3,15 @@
 対象: `要件.txt` に基づく Windows スクリーンセーバー (.scr)。
 本書は `skil.md` の定める「設計書は第三者が読んでも実装可能なレベルまで詳細化する」を満たすことを目的とする。
 
+> **拡張について**: `追加要件.txt` に基づくレイヤー分離エフェクトシステム(上物14種・
+> 背景11種のエフェクトが差分ブロック/壁紙それぞれをらせん吸い込みの前に演出する拡張)は
+> 実装済みで、本書が記述する `AppController`/`Renderer`/`ImageLoader`/`ConfigDialogWin32` は
+> いずれもこの拡張を含む現状のコードを反映している。ただし本書は概要レベルに留め、
+> エフェクトシステム自体の詳細設計(数式・状態遷移・データモデル・テスト方針・設計判断の
+> 経緯)は [`docs/DESIGN_EFFECTS.md`](DESIGN_EFFECTS.md) に譲る(本書には統合しない --
+> 同ファイルの分量が本書の5倍以上あり、全文統合すると本書の可読性を損なうため)。
+> 本節以降で「(→ DESIGN_EFFECTS.md §n)」とある箇所は、そちらを参照のこと。
+
 ## 1. 全体アーキテクチャ
 
 コアロジック (`src/core/`) を Win32/OpenGL 実装 (`src/platform/win32/`) から完全に分離した。
@@ -26,6 +35,13 @@ flowchart TB
         Logger
     end
 
+    subgraph fx["src/core/effects/ (プラットフォーム非依存, レイヤー分離エフェクトシステム -- DESIGN_EFFECTS.md)"]
+        EffectEngine
+        EffectStateMachine
+        EffectScheduler
+        EffectRegistry["EffectRegistry (26 EffectId)"]
+    end
+
     subgraph win32["src/platform/win32/ (Windows専用, CIのwindows-latestで実ビルド)"]
         WinMain --> SaverWindow
         SaverWindow --> OpenGLContext
@@ -33,6 +49,7 @@ flowchart TB
         AppController --> Renderer
         AppController --> ImageLoader
         AppController --> WallpaperProvider
+        AppController --> HueRingBuilder
         ConfigDialogWin32 --> OpenGLContext
         WinMain --> ConfigDialogWin32
         FileLogSink --> Logger
@@ -41,6 +58,9 @@ flowchart TB
     end
 
     win32 -->|core:: 型を利用| core
+    AppController -->|Update/OnPhaseEntered| EffectEngine
+    Renderer -->|ExecuteDrawList| fx
+    fx -->|SpiralMath 等を利用| core
 ```
 
 ## 2. モジュール構成
@@ -61,6 +81,17 @@ flowchart TB
 | `RandomSource` | `IRandomSource` の std::mt19937 実装 (本番用)。テストは別途フェイク実装を使う。 |
 | `Logger` | sink注入型の最小ロガー。本番はファイル出力、テストはメモリキャプチャに差し替え可能。 |
 
+### 2.1.1 src/core/effects/ (拡張、→ DESIGN_EFFECTS.md)
+
+上物レイヤー(差分ブロック)14種・背景レイヤー(壁紙)11種+終端1種、計26の`EffectId`を
+`EffectRegistry`が管理する。`EffectEngine`が両レイヤーの`EffectStateMachine`(継続エフェクトの
+巡回と終端への移行)・`EffectScheduler`(重み付き/台本抽選)を駆動し、`FrameDrawList`という
+純粋データを出力する。`platform::Renderer::ExecuteDrawList`がこれを固定機能GL呼び出しに
+翻訳するだけなので、エフェクトの出力(頂点・変換・アルファ)はGLなしで単体テストできる。
+モジュール一覧・データモデル・状態遷移・全エフェクトの数式は
+[`DESIGN_EFFECTS.md` §2〜§7](DESIGN_EFFECTS.md)を参照。`Effects.Enabled=0`で本拡張前の
+挙動を完全に再現する(§9.4)。
+
 ### 2.2 src/platform/win32/
 
 | モジュール | 責務 |
@@ -68,12 +99,13 @@ flowchart TB
 | `WinMain.cpp` | エントリポイント。`/s /c /p` 引数を解析しディスパッチする。 |
 | `SaverWindow` | フルスクリーン(/s)またはプレビュー子ウィンドウ(/p)の作成とメインループ (60fps目標、Update/Draw/SwapBuffers)。 |
 | `OpenGLContext` | PIXELFORMATDESCRIPTOR設定 + `wglCreateContext` + ダブルバッファ。GPU自動判定のための一時コンテキスト作成にも使う。 |
-| `AppController` | 状態機械・らせん状態・粒子・タイマーを保持し、`Update(dt)`/`Draw()` で要件§4の吸い込み順序を実行するオーケストレータ。起動時に`core::ContentMask`で差分ブロックを決め、`core::ParticleGrid`の部分集合として吸い込み対象を持つ。 |
-| `Renderer` | 固定機能OpenGLの描画バッチ関数群 (全画面クアッド・粒子をそれぞれ `glBegin`/`glEnd` 1回で描画、要件§7)。差分ブロック・背景粒子はいずれも同じ`DrawParticlesBatched`を使う。 |
-| `ImageLoader` | Windows Imaging Component (WIC) でBMP/JPEG/PNG/GIFをデコードしGLテクスチャ化。外部画像ライブラリ不要。 |
+| `AppController` | 状態機械・タイマー・`core::fx::EffectEngine`を保持し、`Update(dt)`/`Draw()`でエンジンを駆動するオーケストレータ(拡張前はらせん状態・粒子配列を自前で保持していたが、これらは`EffectEngine`(→ DESIGN_EFFECTS.md §2)に置き換わった)。起動時に`core::ContentMask`で差分ブロックを決め、上物/背景それぞれの`core::fx::LayerSource`を組み立てて`EffectEngine::SetLayers`に渡す。`HueRingBuilder`(色相回転テクスチャの生成ワーカースレッド、→ DESIGN_EFFECTS.md §6.2.8.1)も所有する。 |
+| `Renderer` | 固定機能OpenGLの描画バッチ関数群。既存の`DrawFullscreenTexturedQuad`/`DrawParticlesBatched`(`STATE_FADE`/`STATE_RESET`用に残存)に加え、`core::fx::FrameDrawList`を解釈する`ExecuteDrawList`(→ DESIGN_EFFECTS.md §7.2)を持つ。 |
+| `ImageLoader` | Windows Imaging Component (WIC) でBMP/JPEG/PNG/GIFをデコードしGLテクスチャ化。外部画像ライブラリ不要。`CreateMaskedTextureFromImage`(差分なしセルのアルファを0にした上物テクスチャ)・`CreateTextureFromRgba`(色相リング用)も提供する。 |
 | `ScreenCapture` | `BitBlt`で画面を1回読み取り`DecodedImage`化。`AppController`がこれを壁紙画像と差分判定し、差分ブロックのテクスチャとしても使う。読み取り専用。 |
 | `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得(読み取り専用)。パスが空(壁紙が画像ではなく単色背景に設定されている場合、Windowsはエラーではなく空文字列を返す)の場合に備え、`GetSysColor(COLOR_DESKTOP)`で実際の単色背景色を取得する`GetSystemDesktopColor`も提供する。また`HKCU\Control Panel\Desktop`の`WallpaperStyle`/`TileWallpaper`(読み取り専用)から実際の壁紙表示設定を判定する`GetSystemWallpaperFitMode`も提供し、`core::WallpaperFit`に渡す。 |
-| `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。 |
+| `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。「Effects...」ボタンからエフェクトシステム専用のダイアログ(→ DESIGN_EFFECTS.md §9.5)を開ける。 |
+| `HueRingBuilder` | HueShiftエフェクト用の色相回転テクスチャをワーカースレッドで事前生成する(→ DESIGN_EFFECTS.md §6.2.8.1)。GL呼び出しは主スレッドのみ。 |
 | `AppPaths` / `WinFileIO` | `%APPDATA%/SpiralSuctionSaver/{config.ini,saver.log}` の解決とワイド文字パスでのファイルI/O (非ASCIIユーザー名対策)。 |
 | `FileLogSink` | `core::Logger` にファイル出力シンクを登録 (1MB超でローテート)。 |
 | `StringConvert` | UTF-8 (core側の文字列表現) ⇄ UTF-16 (Win32 API) 変換。 |
@@ -89,6 +121,16 @@ stateDiagram-v2
     STATE_FADE --> STATE_RESET: alpha=1到達
     STATE_RESET --> STATE_CONTENT: 一定時間経過（無限ループ）
 ```
+
+この5状態の遷移規則自体はエフェクトシステム拡張後も一切変更していない
+(→ DESIGN_EFFECTS.md §2.2, D-1)。拡張後は `STATE_CONTENT`/`STATE_BACKGROUND` の
+「中身」(何が描かれ、どう消えるか)を`core::fx::EffectEngine`が計算するようになった点が
+異なる: 上物・背景はそれぞれ独立したエフェクト状態機械を持ち、下記のらせん吸い込みへ
+入る前に一定時間(既定: 上物ショーケース40秒、背景は要求されるまで)エフェクトを巡回する。
+`Effects.Enabled=0`にすると、この巡回時間が0になり拡張前と同じ挙動になる
+(→ DESIGN_EFFECTS.md §5, §9.4)。以下の各フェーズの説明は`Effects.Enabled=0`時の
+(=拡張前と同じ)経路を記述したものであり、エフェクト巡回中の詳細は
+DESIGN_EFFECTS.md §5〜§6を参照。
 
 各フェーズの詳細:
 
@@ -169,6 +211,11 @@ BackgroundImageOverride=
 - `CustomParticleCount`: `Preset=Custom` のときのみ使用。正の整数以外は既定値(3000)。
 - `BackgroundImageOverride`: 空なら現在の壁紙を自動使用。
 
+拡張後は `[Effects]`/`[ForegroundEffects]`/`[BackgroundEffects]` の3セクションが追加される
+(パーサはセクションを追跡するようになったが、上記3キーは既存ファイルとの後方互換のため
+セクション外でも受理する)。キー仕様・既定値・不正値時のフォールバック規則の全詳細は
+[`DESIGN_EFFECTS.md` §9](DESIGN_EFFECTS.md#9-設定ファイル拡張)を参照。
+
 ## 8. テスト方針
 
 ### 8.1 単体テスト (このリポジトリで実行・全緑を完成条件とする)
@@ -190,6 +237,12 @@ ctest --test-dir build-tests --output-on-failure
 フィット/塗りつぶし)の合成結果とレターボックス色、`ConfigModel` のini往復変換と不正値
 フォールバック、
 `GpuTierClassifier` の既知ベンダ文字列分類、`RandomSource` の値域。
+
+`src/core/effects/` (拡張、`tests/test_fx_*.cpp`) も同じハーネスでテストされ、`ctest`実行に
+含まれる。対象: 全26エフェクトの純粋関数(数式の数値検証・静止一致等の不変条件)、
+`EffectScheduler`の抽選規則、`EffectStateMachine`の全遷移経路、`EffectEngine`の
+`Enabled=0`再現、`Mesh`/`FragmentSystem`等の幾何ヘルパ。詳細は
+[`DESIGN_EFFECTS.md` §12](DESIGN_EFFECTS.md#12-テスト方針)を参照。
 
 ### 8.2 結合テスト
 
@@ -236,10 +289,21 @@ Win32/OpenGL実装はLinux開発機でコンパイルできないため、GitHub
 - [ ] `/s` 起動直後、実際のデスクトップから最初のフレーム(差分ブロックが浮かんだ状態)へ
       黒画面を挟まずに切り替わることを確認する(§9.7)。
 
+エフェクトシステム(拡張)専用のチェックリストは
+[`DESIGN_EFFECTS.md` §12.5](DESIGN_EFFECTS.md#125-結合テスト手動確認)にある
+(エフェクトの巡回・切替、`Effects.Enabled=0`での再現、設定ダイアログの「Effects...」
+ボタン、HueShiftの起動ヒッチ確認等)。
+
 ## 9. 既知の制約・スコープ外事項
 
 - マルチモニタは対象外とし、プライマリディスプレイの解像度のみを使用する
-  (要件.txt に明記がないため、設計レビューでスコープを明示的に限定)。
+  (要件.txt に明記がないため、設計レビューでスコープを明示的に限定)。エフェクトシステム
+  拡張もこの制約を引き継ぐ。
+- エフェクトシステムは差分方式(セル単位の変化検出)を前提とするため、個々のウィンドウ/
+  アイコンを識別した独立アニメーションはできない(将来拡張として
+  → DESIGN_EFFECTS.md §15 に連結成分ラベリング案を記載)。また固定機能OpenGL 1.1のみを
+  使うため、ピクセル単位の色変換(ブラー等)は行わず、頂点単位の幾何変形・頂点色・
+  チャネルマスク・複数パス合成までに限られる(→ DESIGN_EFFECTS.md §1.4, §7.1)。
 - 実デスクトップのアイコン・ウィンドウを移動・削除・設定変更する操作は一切行わない
   (要件§10 禁止事項準拠)。以下で述べる画面キャプチャ・差分判定はいずれも
   **読み取り専用**であり、「操作」ではない。
