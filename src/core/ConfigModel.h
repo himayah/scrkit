@@ -1,10 +1,13 @@
 #pragma once
-// Configuration model + ini (de)serialization (要件.txt §6).
+// Configuration model + ini (de)serialization (要件.txt §6, extended per
+// docs/DESIGN_EFFECTS.md §9 for the layer-separated effect system).
 // Pure string <-> struct logic here; actual file I/O is a thin wrapper in
 // LoadConfigFromFile/SaveConfigToFile so the parsing itself stays testable
 // without touching the filesystem.
 
 #include <string>
+
+#include "effects/EffectParams.h"
 
 namespace core {
 
@@ -21,6 +24,13 @@ struct ConfigModel {
     ParticlePreset preset = ParticlePreset::Mid;
     int customParticleCount = 3000; // used only when preset == Custom
     std::string backgroundImageOverridePath; // empty = use system wallpaper
+
+    // §9: layer-separated effect system config ([Effects]/[ForegroundEffects]/
+    // [BackgroundEffects]). Defaulted via the free function (not in-class
+    // field initializers) so a bare ConfigModel{} already has every catalog
+    // effect populated and the correct per-layer default durations/intensity,
+    // not just whatever ParseConfigIni happens to produce.
+    core::fx::EngineConfig effects = core::fx::MakeDefaultEngineConfig();
 
     static int ParticleCountForPreset(ParticlePreset preset) {
         switch (preset) {
