@@ -166,8 +166,15 @@ struct ContentMaskConfig {
 // a legitimately busy, heavily-windowed desktop's flagged fraction well
 // above what it was pre-fill (real-machine measurement: 75% -> 96% on one
 // capture) -- and only call FillEnclosedMaskHoles afterward.
+//
+// When `outDifferingFraction` is non-null, it's resized to gridN*gridN and
+// filled with each cell's raw `differing / total` ratio (the color-diff
+// fraction *before* the cellDifferingFraction cutoff or the texture-
+// flatness fallback) -- FillBoundaryStraddlingCells' evidence for cells a
+// real window edge only partially covers.
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
-                                      const ContentMaskConfig& config);
+                                      const ContentMaskConfig& config,
+                                      std::vector<float>* outDifferingFraction = nullptr);
 
 // TEMPORARY diagnostic (to be removed once the reported foreground-mask
 // problem is root-caused, matching this project's usual policy -- see git
@@ -241,5 +248,33 @@ void FillEnclosedMaskHoles(std::vector<bool>& mask, int gridN);
 // ~0.7% of the grid beyond what color, texture, and strict enclosure alone
 // found.
 void FillMajorityNeighborCells(std::vector<bool>& mask, int gridN);
+
+// In place: repeatedly promotes a `false` cell to `true` once at least
+// `requiredNeighbors` (default 2) of its (up to 4) orthogonal neighbors are
+// already `true` AND its own raw color-diff fraction in `differingFraction`
+// (ComputeContentMask's optional outDifferingFraction, same row-major
+// layout) is greater than zero, iterating to a fixed point.
+//
+// Targets a real window's own straight edge, which essentially never lands
+// exactly on a grid cell boundary: the one cell it cuts through genuinely
+// contains a mix of window and background pixels, so neither
+// cellDifferingFraction (the mix rarely reaches 30% on its own) nor
+// textureFlatnessMargin (*both* sides show real pixel variance there --
+// the capture's own mix of flat window and photographic background, not a
+// flat/textured mismatch) can resolve it, and FillMajorityNeighborCells'
+// 3-of-4 bar is usually unreachable too (a cell straddling a straight edge
+// typically only ever has 2 true neighbors: the one further along the same
+// edge, and the one on the content side). Real-machine measurement on a
+// capture with exactly this failure mode along a window's right edge:
+// deep-interior background cells (no true neighbors) never showed *any*
+// non-zero raw fraction, so requiring only "greater than zero" plus 2
+// neighbors -- much weaker than the primary threshold -- is still safe;
+// visually, this closed most of the row-by-row wobble along that edge,
+// with the remainder (cells whose own fraction reads exactly zero despite
+// truly being inside the window -- the wallpaper patch behind them
+// happened to match perfectly) needing evidence this function deliberately
+// doesn't use.
+void FillBoundaryStraddlingCells(std::vector<bool>& mask, const std::vector<float>& differingFraction, int gridN,
+                                  int requiredNeighbors = 2);
 
 } // namespace core

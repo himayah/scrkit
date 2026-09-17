@@ -118,11 +118,13 @@ void ResampleRgba(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW
 }
 
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
-                                      const ContentMaskConfig& config) {
+                                      const ContentMaskConfig& config,
+                                      std::vector<float>* outDifferingFraction) {
     const int n = std::max(1, config.gridN);
     const int width = config.screenWidth;
     const int height = config.screenHeight;
     std::vector<bool> mask(static_cast<size_t>(n) * n, false);
+    if (outDifferingFraction) outDifferingFraction->assign(static_cast<size_t>(n) * n, 0.0f);
     if (width <= 0 || height <= 0) return mask;
 
     const size_t pixelCount = static_cast<size_t>(width) * height;
@@ -195,8 +197,10 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
                 }
             }
 
-            bool flagged = total > 0 &&
-                           static_cast<float>(differing) / static_cast<float>(total) >= config.cellDifferingFraction;
+            const float differingFraction = total > 0 ? static_cast<float>(differing) / static_cast<float>(total) : 0.0f;
+            if (outDifferingFraction) (*outDifferingFraction)[cellIndex] = differingFraction;
+
+            bool flagged = differingFraction >= config.cellDifferingFraction;
 
             if (!flagged && total > 0) {
                 const double sampleCount = static_cast<double>(total) * 3.0;
@@ -307,6 +311,35 @@ void FillMajorityNeighborCells(std::vector<bool>& mask, int gridN) {
                 if (col > 0 && mask[idx - 1]) ++trueNeighbors;
                 if (col + 1 < gridN && mask[idx + 1]) ++trueNeighbors;
                 if (trueNeighbors >= 3) {
+                    mask[idx] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+}
+
+void FillBoundaryStraddlingCells(std::vector<bool>& mask, const std::vector<float>& differingFraction, int gridN,
+                                  int requiredNeighbors) {
+    if (gridN <= 0 || mask.size() != static_cast<size_t>(gridN) * gridN ||
+        differingFraction.size() != mask.size()) {
+        return;
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int row = 0; row < gridN; ++row) {
+            for (int col = 0; col < gridN; ++col) {
+                const size_t idx = static_cast<size_t>(row) * gridN + col;
+                if (mask[idx]) continue;
+                if (differingFraction[idx] <= 0.0f) continue;
+                int trueNeighbors = 0;
+                if (row > 0 && mask[idx - static_cast<size_t>(gridN)]) ++trueNeighbors;
+                if (row + 1 < gridN && mask[idx + static_cast<size_t>(gridN)]) ++trueNeighbors;
+                if (col > 0 && mask[idx - 1]) ++trueNeighbors;
+                if (col + 1 < gridN && mask[idx + 1]) ++trueNeighbors;
+                if (trueNeighbors >= requiredNeighbors) {
                     mask[idx] = true;
                     changed = true;
                 }
