@@ -118,6 +118,15 @@ struct ContentMaskConfig {
 //    equally on both sides while leaving real content (icons, taskbar,
 //    open windows -- all much larger and starkly different) essentially
 //    untouched.
+//
+// This is the raw per-cell diff only -- it does not fill enclosed holes
+// (see FillEnclosedMaskHoles). Callers that want the polished result should
+// run IsContentMaskSuspicious (if needed) on this raw mask first -- it's a
+// meaningfully more reliable "does this look like two unrelated images"
+// signal before enclosed holes get filled in, since filling can itself push
+// a legitimately busy, heavily-windowed desktop's flagged fraction well
+// above what it was pre-fill (real-machine measurement: 75% -> 96% on one
+// capture) -- and only call FillEnclosedMaskHoles afterward.
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config);
 
@@ -147,5 +156,30 @@ std::vector<uint8_t> BuildDiffOverlayRgba(const uint8_t* rgba, int width, int he
 // recompute once -- see AppController::Initialize) rather than to reject
 // the result outright: a false trigger just costs one extra recompute.
 bool IsContentMaskSuspicious(const std::vector<bool>& mask, double threshold = 0.90);
+
+// In place: promotes any `false` cell in `mask` (a gridN x gridN grid, same
+// row-major order as ComputeContentMask's result) to `true` if it cannot
+// reach the edge of the grid through a 4-connected chain of other `false`
+// cells -- i.e. it's fully enclosed by "content" cells on every side.
+//
+// Real windows are opaque rectangles; ComputeContentMask's per-cell diff can
+// still miss part of one if the captured pixels there coincidentally
+// resemble the wallpaper at that exact spot (e.g. a plain white dialog
+// background, or a dark terminal, landing close enough to a similarly-
+// colored patch of wallpaper after brightness-gain correction). Real-
+// machine feedback found this cutting out enormous contiguous chunks of a
+// plain-background settings dialog at once (well over 1000 of ~12000 grid
+// cells in one capture) -- the wallpaper visibly showing through the middle
+// of an otherwise-solid window, exactly the originally reported "holes"
+// symptom, and a second, independent cause of it discovered only after the
+// Windows Spotlight/slideshow wallpaper-staleness bug (see
+// AppController::Initialize) was already fixed. A cell that's surrounded by
+// flagged neighbors is far more likely to be exactly that kind of
+// coincidental miss than a real gap of visible wallpaper in the middle of a
+// window, since real windows don't have gaps. A background cell that
+// legitimately reaches the grid edge (i.e. visible desktop background
+// that's actually connected to open space, not boxed in by windows on
+// every side) is left alone.
+void FillEnclosedMaskHoles(std::vector<bool>& mask, int gridN);
 
 } // namespace core

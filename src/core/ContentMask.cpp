@@ -219,4 +219,46 @@ bool IsContentMaskSuspicious(const std::vector<bool>& mask, double threshold) {
     return static_cast<double>(flagged) / static_cast<double>(mask.size()) >= threshold;
 }
 
+void FillEnclosedMaskHoles(std::vector<bool>& mask, int gridN) {
+    if (gridN <= 0 || mask.size() != static_cast<size_t>(gridN) * gridN) return;
+
+    // Flood fill from every `false` cell on the grid's outer edge, over
+    // 4-connected `false` neighbors only (never crossing a `true`/content
+    // cell). Anything left unreached afterwards is a `false` cell that's
+    // fully boxed in by content -- an enclosed hole -- and gets promoted to
+    // `true`.
+    std::vector<bool> reachesEdge(mask.size(), false);
+    std::vector<int> stack;
+    stack.reserve(mask.size());
+    auto visit = [&](int row, int col) {
+        if (row < 0 || row >= gridN || col < 0 || col >= gridN) return;
+        const size_t idx = static_cast<size_t>(row) * gridN + col;
+        if (mask[idx] || reachesEdge[idx]) return;
+        reachesEdge[idx] = true;
+        stack.push_back(static_cast<int>(idx));
+    };
+    for (int col = 0; col < gridN; ++col) {
+        visit(0, col);
+        visit(gridN - 1, col);
+    }
+    for (int row = 0; row < gridN; ++row) {
+        visit(row, 0);
+        visit(row, gridN - 1);
+    }
+    while (!stack.empty()) {
+        const int idx = stack.back();
+        stack.pop_back();
+        const int row = idx / gridN;
+        const int col = idx % gridN;
+        visit(row - 1, col);
+        visit(row + 1, col);
+        visit(row, col - 1);
+        visit(row, col + 1);
+    }
+
+    for (size_t i = 0; i < mask.size(); ++i) {
+        if (!mask[i] && !reachesEdge[i]) mask[i] = true;
+    }
+}
+
 } // namespace core

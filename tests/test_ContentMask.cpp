@@ -5,6 +5,7 @@
 using core::BuildDiffOverlayRgba;
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
+using core::FillEnclosedMaskHoles;
 using core::IsContentMaskSuspicious;
 using core::PixelToGridIndex;
 using core::ResampleRgba;
@@ -369,4 +370,125 @@ TEST_CASE(IsContentMaskSuspicious_CustomThresholdIsRespected) {
     mask[0] = true; // 10%
     CHECK(!IsContentMaskSuspicious(mask, 0.5));
     CHECK(IsContentMaskSuspicious(mask, 0.1));
+}
+
+TEST_CASE(FillEnclosedMaskHoles_SingleEnclosedCellGetsFilled) {
+    // 3x3 grid, all true except the center -- the center can't reach any
+    // edge without crossing a true cell.
+    std::vector<bool> mask(9, true);
+    mask[4] = false; // (row=1, col=1)
+    FillEnclosedMaskHoles(mask, 3);
+    CHECK(mask[4]);
+}
+
+TEST_CASE(FillEnclosedMaskHoles_BorderTouchingFalseRegionStaysFalse) {
+    // 3x3 grid, entire left column false -- each of those cells already sits
+    // on the grid edge, so none of them is a "hole" to fill.
+    std::vector<bool> mask = {false, true, true, false, true, true, false, true, true};
+    FillEnclosedMaskHoles(mask, 3);
+    CHECK(!mask[0]);
+    CHECK(!mask[3]);
+    CHECK(!mask[6]);
+}
+
+TEST_CASE(FillEnclosedMaskHoles_DiagonalAdjacencyDoesNotCountAsReachingTheEdge) {
+    // 3x3 grid: (0,0) is false and touches the border; (1,1) is false too,
+    // but only *diagonally* adjacent to (0,0) -- all 4 of its orthogonal
+    // neighbors are true. 4-connectivity must not treat the diagonal
+    // neighbor as a path out, so (1,1) still counts as enclosed.
+    std::vector<bool> mask = {false, true, true, true, false, true, true, true, true};
+    FillEnclosedMaskHoles(mask, 3);
+    CHECK(!mask[0]);  // (0,0): reaches the edge directly, stays false
+    CHECK(mask[4]);   // (1,1): enclosed, gets filled
+}
+
+TEST_CASE(FillEnclosedMaskHoles_MultiCellEnclosedRegionIsFullyFilled) {
+    // 5x5 grid: a solid true ring around the border, false everywhere in the
+    // 3x3 interior -- models a large coincidental-color miss spanning many
+    // cells inside one window (real-machine feedback: over 1000 cells at
+    // once). All 9 interior cells should be promoted together.
+    std::vector<bool> mask(25, true);
+    for (int row = 1; row <= 3; ++row) {
+        for (int col = 1; col <= 3; ++col) {
+            mask[static_cast<size_t>(row) * 5 + col] = false;
+        }
+    }
+    FillEnclosedMaskHoles(mask, 5);
+    for (int row = 1; row <= 3; ++row) {
+        for (int col = 1; col <= 3; ++col) {
+            CHECK(mask[static_cast<size_t>(row) * 5 + col]);
+        }
+    }
+}
+
+TEST_CASE(FillEnclosedMaskHoles_AllFalseGridHasNothingEnclosed) {
+    // No content at all: every false cell can reach the edge through its
+    // all-false neighbors, so nothing changes.
+    std::vector<bool> mask(16, false);
+    FillEnclosedMaskHoles(mask, 4);
+    for (bool cell : mask) CHECK(!cell);
+}
+
+namespace {
+// 200x200 screen, gridN=5 (40x40px cells -- large relative to the box
+// blur's radius-2 window, so only a thin ~19% edge ring of any cell bleeds
+// into a differently-colored neighbor, comfortably under
+// cellDifferingFraction on its own). Wallpaper and background are both
+// plain white -- the clear pixel-count majority, so the robust brightness
+// gain stays ~1.0 -- with a solid black 3x3-cell "window" (rows/cols 1-3)
+// in the middle, except its dead-center cell (2,2), which happens to be
+// white too: a plain dialog background landing on a similarly-colored
+// wallpaper patch, fully enclosed by the rest of the window on every side.
+std::vector<uint8_t> MakeCoincidentalColorMatchCapture(int width, int height) {
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 40, 40, 160, 160, 0, 0, 0);      // 3x3 black window block
+    FillRect(capture, width, 80, 80, 120, 120, 255, 255, 255); // center cell (2,2) stays white
+    return capture;
+}
+} // namespace
+
+TEST_CASE(ComputeContentMask_RawResultStillMissesACoincidentalColorMatch) {
+    // ComputeContentMask alone is just the raw per-cell diff, so the
+    // coincidentally-white center cell is still missed here --
+    // FillEnclosedMaskHoles is a separate, explicit step callers chain on
+    // afterward (see ComputeContentMask_ThenFillEnclosedMaskHoles_
+    // RecoversTheCoincidentalColorMatch below).
+    const int width = 200, height = 200, gridN = 5;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = MakeCoincidentalColorMatchCapture(width, height);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+
+    CHECK(!mask[2 * gridN + 2]);
+    // The other 8 cells of the 3x3 window block are genuinely black -- real
+    // content -- and should already be flagged without any hole-filling.
+    for (int row = 1; row <= 3; ++row) {
+        for (int col = 1; col <= 3; ++col) {
+            if (row == 2 && col == 2) continue;
+            CHECK(mask[static_cast<size_t>(row) * gridN + col]);
+        }
+    }
+}
+
+TEST_CASE(ComputeContentMask_ThenFillEnclosedMaskHoles_RecoversTheCoincidentalColorMatch) {
+    // Same setup as above, but chaining FillEnclosedMaskHoles afterward (the
+    // way AppController::Initialize does once it's done using the raw mask
+    // for the Spotlight/slideshow suspicion check) recovers the missed
+    // center cell too, since it's fully enclosed by flagged neighbors.
+    const int width = 200, height = 200, gridN = 5;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = MakeCoincidentalColorMatchCapture(width, height);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    FillEnclosedMaskHoles(mask, gridN);
+
+    CHECK(mask[2 * gridN + 2]);
 }

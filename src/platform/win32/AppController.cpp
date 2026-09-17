@@ -137,6 +137,21 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         }
     }
 
+    // Close any cell the diff above still missed but that's fully boxed in
+    // by flagged neighbors -- a real window whose captured pixels
+    // coincidentally resembled the wallpaper at that exact spot (e.g. a
+    // plain dialog background landing on a similarly-colored wallpaper
+    // patch), not an actual gap of visible wallpaper (real windows don't
+    // have gaps). Deliberately run *after* the suspicion check above, not
+    // as part of tryWallpaper: filling can itself push a legitimately busy,
+    // heavily-windowed desktop's flagged fraction well above what it was
+    // pre-fill (real-machine measurement: 75% -> 96% on one capture), which
+    // would otherwise make that check trigger the Spotlight/slideshow retry
+    // on completely ordinary desktops.
+    if (haveMatchingCapture) {
+        core::FillEnclosedMaskHoles(attempt.mask, gridN_);
+    }
+
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
     const std::vector<bool>& mask = attempt.mask;
 
