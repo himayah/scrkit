@@ -23,68 +23,30 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     screenWidth_ = screenWidthPx;
     screenHeight_ = screenHeightPx;
 
-    // 1. Background image (falls back to a flat color rather than failing --
-    //    design doc: エラーハンドリング方針). When there's no wallpaper *file*
-    //    to decode -- notably, Windows reports an empty path here (not a
-    //    decode failure) when the user has chosen a plain solid-color
-    //    background instead of a picture -- fall back to that real desktop
-    //    color rather than an arbitrary placeholder, so both the rendered
-    //    background and the content diff below actually match what's really
-    //    on screen (user feedback: a visibly-wrong flat placeholder color was
-    //    showing through wherever content particles had been sucked away).
+    // 1. Desktop solid color: used as the background-image fallback (falls
+    //    back to a flat color rather than failing -- design doc: エラー
+    //    ハンドリング方針). When there's no wallpaper *file* to decode --
+    //    notably, Windows reports an empty path here (not a decode failure)
+    //    when the user has chosen a plain solid-color background instead of
+    //    a picture -- fall back to that real desktop color rather than an
+    //    arbitrary placeholder, so both the rendered background and the
+    //    content diff below actually match what's really on screen (user
+    //    feedback: a visibly-wrong flat placeholder color was showing
+    //    through wherever content particles had been sucked away).
     // Also used below as the letterbox fill color for Center/Fit wallpaper
     // styles, so read it unconditionally.
     uint8_t desktopR = 30, desktopG = 40, desktopB = 60;
     GetSystemDesktopColor(desktopR, desktopG, desktopB);
 
-    DecodedImage image;
-    if (wallpaperPath.empty() || !DecodeImageFile(wallpaperPath, image)) {
-        if (!wallpaperPath.empty()) {
-            core::Logger::Warn("AppController: falling back to placeholder background image");
-        }
-        image = MakeFallbackImage(desktopR, desktopG, desktopB);
-    }
-
-    // Composite the wallpaper the same way Windows actually positions/
-    // scales it (Fill/Fit/Stretch/Center/Tile) *before* building the visible
-    // background texture below -- see git history for the full rationale.
-    // When a same-size real desktop capture is available, uses the *aligned*
-    // variant (core::CompositeWallpaperAligned), which searches the capture
-    // for Fill/Span's actual crop position instead of assuming it's centered.
-    // This one composited image is then reused below for the content diff
-    // too, so the rendered background and the diff always agree on what "the
-    // wallpaper" looks like.
     const bool haveMatchingCapture =
         desktopCapture && desktopCapture->width == screenWidth_ && desktopCapture->height == screenHeight_;
-    DecodedImage compositedWallpaper;
-    compositedWallpaper.width = screenWidth_;
-    compositedWallpaper.height = screenHeight_;
-    compositedWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
-    core::CompositeWallpaperAligned(image.rgba.data(), image.width, image.height, compositedWallpaper.rgba.data(),
-                                     screenWidth_, screenHeight_, GetSystemWallpaperFitMode(), desktopR, desktopG,
-                                     desktopB, haveMatchingCapture ? desktopCapture->rgba.data() : nullptr);
-
-    backgroundTexture_ = CreateTextureFromImage(compositedWallpaper);
-    if (backgroundTexture_ == 0) {
-        core::Logger::Error("AppController: failed to create background texture");
-        return false;
-    }
-
-    // §6.2.8.1: start generating HueShift's hue-rotated copies now, off the
-    // main thread, so they're likely ready well before HueShift could ever
-    // be picked (Effects.Enabled=1's first background cycle is seconds away
-    // at minimum). maxRingBytes matches HueShiftParams::maxRingBytes.
-    for (GLuint tex : hueRingTextures_) {
-        if (tex != 0) glDeleteTextures(1, &tex);
-    }
-    hueRingTextures_.assign(static_cast<size_t>(kHueRingSteps - 1), 0);
-    hueRingBuilder_ = std::make_unique<HueRingBuilder>();
-    hueRingBuilder_->Start(compositedWallpaper.rgba, screenWidth_, screenHeight_, kHueRingSteps,
-                            64ull * 1024 * 1024);
 
     // 2. Particle count: resolve Auto/Custom/preset into a concrete count,
     //    then lay out the NxN grid (要件.txt §5, §6). Both layers' cells
     //    come from this same grid (DESIGN_EFFECTS.md §4.1's LayerSource).
+    //    Done before the wallpaper decode below since computing the content
+    //    mask (part of that step, for the Spotlight/slideshow retry) needs
+    //    gridN_ and particles_ already available.
     const int autoCount = ResolveAutoParticleCountFromCurrentContext();
     resolvedParticleCount_ = config.ResolveParticleCount(autoCount);
     if (resolvedParticleCount_ < 1) resolvedParticleCount_ = 1;
@@ -106,6 +68,96 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     particleHalfWidthPx_ = cellWidth * 0.55f;
     particleHalfHeightPx_ = cellHeight * 0.55f;
 
+    // 1 (continued). Wallpaper image: decodes and composites the wallpaper
+    // at `path` the same way Windows
+    // actually positions/scales it (Fill/Fit/Stretch/Center/Tile), then (if
+    // a same-size real desktop capture is available) diffs it against that
+    // capture the same way the content phase does -- so this one function
+    // can be used both for the normal single attempt and for the retry
+    // below, and both always agree on what "the wallpaper" looks like.
+    struct WallpaperAttempt {
+        DecodedImage compositedWallpaper;
+        std::vector<bool> mask;
+    };
+    auto tryWallpaper = [&](const std::wstring& path) {
+        WallpaperAttempt attempt;
+        DecodedImage image;
+        if (path.empty() || !DecodeImageFile(path, image)) {
+            if (!path.empty()) {
+                core::Logger::Warn("AppController: falling back to placeholder background image");
+            }
+            image = MakeFallbackImage(desktopR, desktopG, desktopB);
+        }
+        attempt.compositedWallpaper.width = screenWidth_;
+        attempt.compositedWallpaper.height = screenHeight_;
+        attempt.compositedWallpaper.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
+        core::CompositeWallpaperAligned(image.rgba.data(), image.width, image.height,
+                                         attempt.compositedWallpaper.rgba.data(), screenWidth_, screenHeight_,
+                                         GetSystemWallpaperFitMode(), desktopR, desktopG, desktopB,
+                                         haveMatchingCapture ? desktopCapture->rgba.data() : nullptr);
+        if (haveMatchingCapture) {
+            core::ContentMaskConfig maskConfig;
+            maskConfig.screenWidth = screenWidth_;
+            maskConfig.screenHeight = screenHeight_;
+            maskConfig.gridN = gridN_;
+            attempt.mask = core::ComputeContentMask(desktopCapture->rgba.data(),
+                                                      attempt.compositedWallpaper.rgba.data(), maskConfig);
+        }
+        return attempt;
+    };
+
+    WallpaperAttempt attempt = tryWallpaper(wallpaperPath);
+
+    // Real-machine investigation (see spiral-saver-open-work memory) traced
+    // "holes"/false-positive content to Windows Spotlight/slideshow desktop
+    // backgrounds: GetSystemWallpaperPath() (SPI_GETDESKWALLPAPER) can
+    // return a path that no longer matches what's actually on screen, so the
+    // diff above compares two unrelated photos and flags nearly the whole
+    // screen. Detect that with core::IsContentMaskSuspicious and, only when
+    // we're following the live system wallpaper (not a fixed config
+    // override, which can't itself go stale), re-query the path once and
+    // retry -- keeping whichever attempt flagged less content. A false
+    // trigger (e.g. a genuine full-screen maximized window) just costs one
+    // extra recompute, not a wrong result.
+    if (haveMatchingCapture && config.backgroundImageOverridePath.empty() &&
+        core::IsContentMaskSuspicious(attempt.mask)) {
+        const std::wstring freshPath = GetSystemWallpaperPath();
+        if (!freshPath.empty() && freshPath != wallpaperPath) {
+            core::Logger::Warn(
+                "AppController: content mask flagged most of the screen; re-querying system wallpaper "
+                "path in case it was stale (e.g. Windows Spotlight/slideshow rotated during startup)");
+            WallpaperAttempt retryAttempt = tryWallpaper(freshPath);
+            const size_t originalFlagged =
+                static_cast<size_t>(std::count(attempt.mask.begin(), attempt.mask.end(), true));
+            const size_t retryFlagged =
+                static_cast<size_t>(std::count(retryAttempt.mask.begin(), retryAttempt.mask.end(), true));
+            if (retryFlagged < originalFlagged) {
+                attempt = std::move(retryAttempt);
+            }
+        }
+    }
+
+    DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
+    const std::vector<bool>& mask = attempt.mask;
+
+    backgroundTexture_ = CreateTextureFromImage(compositedWallpaper);
+    if (backgroundTexture_ == 0) {
+        core::Logger::Error("AppController: failed to create background texture");
+        return false;
+    }
+
+    // §6.2.8.1: start generating HueShift's hue-rotated copies now, off the
+    // main thread, so they're likely ready well before HueShift could ever
+    // be picked (Effects.Enabled=1's first background cycle is seconds away
+    // at minimum). maxRingBytes matches HueShiftParams::maxRingBytes.
+    for (GLuint tex : hueRingTextures_) {
+        if (tex != 0) glDeleteTextures(1, &tex);
+    }
+    hueRingTextures_.assign(static_cast<size_t>(kHueRingSteps - 1), 0);
+    hueRingBuilder_ = std::make_unique<HueRingBuilder>();
+    hueRingBuilder_->Start(compositedWallpaper.rgba, screenWidth_, screenHeight_, kHueRingSteps,
+                            64ull * 1024 * 1024);
+
     // 3. Real desktop capture + content diff (optional): a still image of
     //    the real screen, diffed cell-by-cell against the wallpaper (same
     //    grid as particles_ above) so only the cells that actually differ --
@@ -118,13 +170,6 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     std::vector<int> contentCellIndices;
 
     if (haveMatchingCapture) {
-        core::ContentMaskConfig maskConfig;
-        maskConfig.screenWidth = screenWidth_;
-        maskConfig.screenHeight = screenHeight_;
-        maskConfig.gridN = gridN_;
-        const std::vector<bool> mask =
-            core::ComputeContentMask(desktopCapture->rgba.data(), compositedWallpaper.rgba.data(), maskConfig);
-
         for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
             if (mask[i]) {
                 contentParticles_.push_back(particles_[i]);

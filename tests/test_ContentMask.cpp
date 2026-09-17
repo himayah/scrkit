@@ -5,6 +5,7 @@
 using core::BuildDiffOverlayRgba;
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
+using core::IsContentMaskSuspicious;
 using core::PixelToGridIndex;
 using core::ResampleRgba;
 
@@ -339,4 +340,33 @@ TEST_CASE(BuildDiffOverlayRgba_TintsOnlyNonContentCellsAndPreservesContentPixels
     CHECK_EQ(overlay[idx + 0], static_cast<uint8_t>(255));
     CHECK_EQ(overlay[idx + 1], static_cast<uint8_t>(0));
     CHECK_EQ(overlay[idx + 2], static_cast<uint8_t>(255));
+}
+
+TEST_CASE(IsContentMaskSuspicious_EmptyMaskIsNotSuspicious) {
+    std::vector<bool> mask;
+    CHECK(!IsContentMaskSuspicious(mask));
+}
+
+TEST_CASE(IsContentMaskSuspicious_AllFlaggedIsSuspicious) {
+    std::vector<bool> mask(100, true);
+    CHECK(IsContentMaskSuspicious(mask));
+}
+
+TEST_CASE(IsContentMaskSuspicious_BelowDefaultThresholdIsNotSuspicious) {
+    std::vector<bool> mask(100, false);
+    for (int i = 0; i < 89; ++i) mask[static_cast<size_t>(i)] = true; // 89%, just under the 90% default
+    CHECK(!IsContentMaskSuspicious(mask));
+}
+
+TEST_CASE(IsContentMaskSuspicious_AtDefaultThresholdIsSuspicious) {
+    std::vector<bool> mask(100, false);
+    for (int i = 0; i < 90; ++i) mask[static_cast<size_t>(i)] = true; // exactly 90%
+    CHECK(IsContentMaskSuspicious(mask));
+}
+
+TEST_CASE(IsContentMaskSuspicious_CustomThresholdIsRespected) {
+    std::vector<bool> mask(10, false);
+    mask[0] = true; // 10%
+    CHECK(!IsContentMaskSuspicious(mask, 0.5));
+    CHECK(IsContentMaskSuspicious(mask, 0.1));
 }

@@ -213,4 +213,10 @@ std::vector<uint8_t> BuildDiffOverlayRgba(const uint8_t* rgba, int width, int he
     return out;
 }
 
+bool IsContentMaskSuspicious(const std::vector<bool>& mask, double threshold) {
+    if (mask.empty()) return false;
+    const size_t flagged = static_cast<size_t>(std::count(mask.begin(), mask.end(), true));
+    return static_cast<double>(flagged) / static_cast<double>(mask.size()) >= threshold;
+}
+
 } // namespace core

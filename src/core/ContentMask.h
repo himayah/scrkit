@@ -134,4 +134,18 @@ std::vector<uint8_t> BuildDiffOverlayRgba(const uint8_t* rgba, int width, int he
                                            const std::vector<bool>& mask, int gridN, uint8_t tintR,
                                            uint8_t tintG, uint8_t tintB);
 
+// Returns true if `mask` flags at least `threshold` (default 90%) of its
+// cells as content -- a strong signal that `captureRgba` and `wallpaperRgba`
+// don't actually correspond to the same on-screen image at all, rather than
+// genuine dense foreground content. Real-machine investigation found this
+// exact failure mode with Windows Spotlight/slideshow desktop backgrounds:
+// platform::GetSystemWallpaperPath() (SPI_GETDESKWALLPAPER) can return a
+// path that no longer matches what's actually rendered on screen, so the
+// diff compares two unrelated photos and flags nearly the whole screen.
+// A single legitimate maximized window can also flag close to 100%, so this
+// is meant to gate a cheap, bounded retry (re-fetch the wallpaper path and
+// recompute once -- see AppController::Initialize) rather than to reject
+// the result outright: a false trigger just costs one extra recompute.
+bool IsContentMaskSuspicious(const std::vector<bool>& mask, double threshold = 0.90);
+
 } // namespace core
