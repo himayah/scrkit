@@ -5,7 +5,9 @@
 using core::BuildDiffOverlayRgba;
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
+using core::FillBoundaryStraddlingCells;
 using core::FillEnclosedMaskHoles;
+using core::FillMajorityNeighborCells;
 using core::IsContentMaskSuspicious;
 using core::PixelToGridIndex;
 using core::ResampleRgba;
@@ -65,6 +67,35 @@ TEST_CASE(ContentMask_OnlyDifferingCellIsFlagged) {
     for (size_t i = 0; i < mask.size(); ++i) {
         CHECK_EQ(mask[i], i == flaggedIndex);
     }
+}
+
+TEST_CASE(ComputeContentMask_OutDifferingFractionReportsTheRawPerCellRatio) {
+    // Same setup as ContentMask_OnlyDifferingCellIsFlagged: a single fully-
+    // differing cell among otherwise-identical solid buffers. The optional
+    // out-param should report ~1.0 for that cell, independent of the
+    // cellDifferingFraction cutoff itself, and exactly 0 for a cell far
+    // enough away that the box blur's radius-2 window can't bleed the
+    // differing block's brightness into it (immediately-adjacent cells are
+    // deliberately not checked here -- some blur bleed into their shared
+    // border is expected and is exactly what stays under
+    // cellDifferingFraction's 30% cutoff without tripping it).
+    const int width = 64, height = 64, gridN = 4;
+    auto capture = SolidBuffer(width, height, 0, 0, 0);
+    auto wallpaper = SolidBuffer(width, height, 0, 0, 0);
+    FillRect(capture, width, 32, 16, 48, 32, 255, 255, 255); // cell (row=1, col=2)
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    std::vector<float> fraction;
+    ComputeContentMask(capture.data(), wallpaper.data(), config, &fraction);
+
+    CHECK_EQ(fraction.size(), static_cast<size_t>(16));
+    const size_t flaggedIndex = static_cast<size_t>(1) * gridN + 2;
+    CHECK(fraction[flaggedIndex] > 0.99f);
+    const size_t farIndex = static_cast<size_t>(3) * gridN + 0; // opposite corner
+    CHECK_EQ(fraction[farIndex], 0.0f);
 }
 
 TEST_CASE(ContentMask_BelowFractionThresholdStaysFalse) {
@@ -499,6 +530,88 @@ TEST_CASE(FillEnclosedMaskHoles_MultiCellEnclosedRegionIsFullyFilled) {
             CHECK(mask[static_cast<size_t>(row) * 5 + col]);
         }
     }
+}
+
+TEST_CASE(FillMajorityNeighborCells_ThreeOfFourNeighborsFillsTheCell) {
+    // 3x3 grid, center false with 3 of its 4 orthogonal neighbors true.
+    std::vector<bool> mask = {false, true, false, true, false, true, false, true, false};
+    FillMajorityNeighborCells(mask, 3);
+    CHECK(mask[4]); // center
+}
+
+TEST_CASE(FillMajorityNeighborCells_TwoOfFourNeighborsStaysFalse) {
+    // 3x3 grid, center false with only 2 of its 4 orthogonal neighbors true
+    // (top and left) -- below the 3-neighbor bar.
+    std::vector<bool> mask = {false, true, false, true, false, false, false, false, false};
+    FillMajorityNeighborCells(mask, 3);
+    CHECK(!mask[4]);
+}
+
+TEST_CASE(FillMajorityNeighborCells_CornerCellNeverFillsRegardlessOfNeighbors) {
+    // A corner cell has only 2 possible orthogonal neighbors, so it can
+    // never reach the 3-neighbor bar even when both are true.
+    std::vector<bool> mask = {false, true, true, true, true, true, true, true, true};
+    FillMajorityNeighborCells(mask, 3);
+    CHECK(!mask[0]); // top-left corner
+}
+
+TEST_CASE(FillMajorityNeighborCells_CascadesAlongAChainToConvergence) {
+    // 4x4 grid: rows 0, 2, and 3 fully true; row 1 is true only at its left
+    // end. Each false cell in row 1 reaches 3 true neighbors (up, down, and
+    // its now-filled left neighbor) only after the one before it has
+    // already been promoted -- this only fully resolves if the fill
+    // iterates to a fixed point rather than a single pass.
+    // clang-format off
+    std::vector<bool> mask = {
+        true,  true,  true,  true,
+        true,  false, false, false,
+        true,  true,  true,  true,
+        true,  true,  true,  true,
+    };
+    // clang-format on
+    FillMajorityNeighborCells(mask, 4);
+    for (bool cell : mask) CHECK(cell);
+}
+
+TEST_CASE(FillBoundaryStraddlingCells_PromotesWithTwoNeighborsAndNonzeroFraction) {
+    // 3x3 grid, center false with 2 true neighbors (top, left) and a small
+    // but nonzero own fraction -- models a real window-edge cell.
+    std::vector<bool> mask = {false, true, false, true, false, false, false, false, false};
+    std::vector<float> fraction = {0, 0, 0, 0, 0.05f, 0, 0, 0, 0};
+    FillBoundaryStraddlingCells(mask, fraction, 3);
+    CHECK(mask[4]);
+}
+
+TEST_CASE(FillBoundaryStraddlingCells_DoesNotPromoteWithExactlyZeroFraction) {
+    // Same 2-true-neighbor geometry, but the center's own fraction is
+    // exactly zero -- no color evidence at all, so it's left alone (it's
+    // exactly as likely to be genuine adjacent background).
+    std::vector<bool> mask = {false, true, false, true, false, false, false, false, false};
+    std::vector<float> fraction = {0, 0, 0, 0, 0.0f, 0, 0, 0, 0};
+    FillBoundaryStraddlingCells(mask, fraction, 3);
+    CHECK(!mask[4]);
+}
+
+TEST_CASE(FillBoundaryStraddlingCells_DoesNotPromoteWithOnlyOneNeighborAtDefaultRequirement) {
+    // Only 1 true neighbor (top) -- below the default requiredNeighbors=2.
+    std::vector<bool> mask = {false, true, false, false, false, false, false, false, false};
+    std::vector<float> fraction = {0, 0, 0, 0, 0.20f, 0, 0, 0, 0};
+    FillBoundaryStraddlingCells(mask, fraction, 3);
+    CHECK(!mask[4]);
+}
+
+TEST_CASE(FillBoundaryStraddlingCells_RequiredNeighborsIsConfigurable) {
+    std::vector<bool> mask = {false, true, false, false, false, false, false, false, false};
+    std::vector<float> fraction = {0, 0, 0, 0, 0.20f, 0, 0, 0, 0};
+    FillBoundaryStraddlingCells(mask, fraction, 3, /*requiredNeighbors=*/1);
+    CHECK(mask[4]);
+}
+
+TEST_CASE(FillBoundaryStraddlingCells_MismatchedFractionSizeIsNoop) {
+    std::vector<bool> mask = {false, true, false, true, false, false, false, false, false};
+    std::vector<float> fraction = {0, 0, 0.05f}; // wrong size
+    FillBoundaryStraddlingCells(mask, fraction, 3);
+    CHECK(!mask[4]);
 }
 
 TEST_CASE(FillEnclosedMaskHoles_AllFalseGridHasNothingEnclosed) {

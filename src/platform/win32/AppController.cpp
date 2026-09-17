@@ -78,6 +78,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     struct WallpaperAttempt {
         DecodedImage compositedWallpaper;
         std::vector<bool> mask;
+        std::vector<float> differingFraction; // parallel to mask; see ComputeContentMask's outDifferingFraction
     };
     auto tryWallpaper = [&](const std::wstring& path) {
         WallpaperAttempt attempt;
@@ -101,7 +102,8 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             maskConfig.screenHeight = screenHeight_;
             maskConfig.gridN = gridN_;
             attempt.mask = core::ComputeContentMask(desktopCapture->rgba.data(),
-                                                      attempt.compositedWallpaper.rgba.data(), maskConfig);
+                                                      attempt.compositedWallpaper.rgba.data(), maskConfig,
+                                                      &attempt.differingFraction);
         }
         return attempt;
     };
@@ -148,8 +150,20 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     // pre-fill (real-machine measurement: 75% -> 96% on one capture), which
     // would otherwise make that check trigger the Spotlight/slideshow retry
     // on completely ordinary desktops.
+    // Then close the remaining misses that aren't *fully* enclosed -- a
+    // window's own edge, title bar corner, or a thin separator line inside
+    // it, sitting one cell away from a large background region that's
+    // still connected onward to the grid edge (see
+    // FillMajorityNeighborCells's doc comment).
+    // Finally, smooth the row-by-row wobble along a real window's own
+    // straight edge -- it essentially never lands exactly on a grid cell
+    // boundary, so the one cell it cuts through is a genuine, ambiguous mix
+    // of window and background pixels that none of the above can resolve
+    // on their own (see FillBoundaryStraddlingCells's doc comment).
     if (haveMatchingCapture) {
         core::FillEnclosedMaskHoles(attempt.mask, gridN_);
+        core::FillMajorityNeighborCells(attempt.mask, gridN_);
+        core::FillBoundaryStraddlingCells(attempt.mask, attempt.differingFraction, gridN_);
     }
 
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
