@@ -176,19 +176,6 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
                                       const ContentMaskConfig& config,
                                       std::vector<float>* outDifferingFraction = nullptr);
 
-// TEMPORARY diagnostic (to be removed once the reported foreground-mask
-// problem is root-caused, matching this project's usual policy -- see git
-// history for other examples of this pattern, e.g. DESIGN.md §9.7/§9.8).
-// Returns a copy of `rgba` with every pixel whose cell `mask` does NOT flag
-// as content replaced by a solid tint color, so any gap/hole inside what
-// should be a solid rectangle (a captured icon or window) is immediately
-// visible against the real captured pixels around it. Uses the exact same
-// PixelToGridIndex cell lookup CreateMaskedTextureFromImage uses, so this
-// shows precisely what that function's mask decision looks like per pixel.
-std::vector<uint8_t> BuildDiffOverlayRgba(const uint8_t* rgba, int width, int height,
-                                           const std::vector<bool>& mask, int gridN, uint8_t tintR,
-                                           uint8_t tintG, uint8_t tintB);
-
 // Returns true if `mask` flags at least `threshold` (default 90%) of its
 // cells as content -- a strong signal that `captureRgba` and `wallpaperRgba`
 // don't actually correspond to the same on-screen image at all, rather than

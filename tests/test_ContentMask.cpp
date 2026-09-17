@@ -2,7 +2,6 @@
 
 #include "../src/core/ContentMask.h"
 
-using core::BuildDiffOverlayRgba;
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
 using core::FillBoundaryStraddlingCells;
@@ -434,24 +433,6 @@ TEST_CASE(PixelToGridIndex_LastCellIsNotAbnormallyWide) {
     }
     const int nominalCellWidth = width / gridN; // 35
     CHECK(lastCellWidth <= nominalCellWidth + 1);
-}
-
-TEST_CASE(BuildDiffOverlayRgba_TintsOnlyNonContentCellsAndPreservesContentPixels) {
-    // 4x4 image, gridN=2 (each cell is 2x2 pixels). Only cell (0,0) is content.
-    auto src = SolidBuffer(4, 4, 10, 20, 30);
-    std::vector<bool> mask = {true, false, false, false}; // row-major 2x2
-    const auto overlay = BuildDiffOverlayRgba(src.data(), 4, 4, mask, 2, 255, 0, 255);
-
-    // Pixel (0,0) is in the content cell -> untouched.
-    CHECK_EQ(overlay[0], static_cast<uint8_t>(10));
-    CHECK_EQ(overlay[1], static_cast<uint8_t>(20));
-    CHECK_EQ(overlay[2], static_cast<uint8_t>(30));
-
-    // Pixel (3,3) is in a non-content cell -> tinted magenta.
-    const size_t idx = (static_cast<size_t>(3) * 4 + 3) * 4;
-    CHECK_EQ(overlay[idx + 0], static_cast<uint8_t>(255));
-    CHECK_EQ(overlay[idx + 1], static_cast<uint8_t>(0));
-    CHECK_EQ(overlay[idx + 2], static_cast<uint8_t>(255));
 }
 
 TEST_CASE(IsContentMaskSuspicious_EmptyMaskIsNotSuspicious) {

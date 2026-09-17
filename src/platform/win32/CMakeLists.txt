@@ -8,7 +8,6 @@ set(WIN32_SOURCES
     AppController.cpp
     AppPaths.cpp
     ConfigDialogWin32.cpp
-    DebugDump.cpp
     FileLogSink.cpp
     HueRingBuilder.cpp
     ImageLoader.cpp
