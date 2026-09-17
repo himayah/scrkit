@@ -6,6 +6,7 @@ using core::BuildDiffOverlayRgba;
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
 using core::FillEnclosedMaskHoles;
+using core::FillMajorityNeighborCells;
 using core::IsContentMaskSuspicious;
 using core::PixelToGridIndex;
 using core::ResampleRgba;
@@ -499,6 +500,47 @@ TEST_CASE(FillEnclosedMaskHoles_MultiCellEnclosedRegionIsFullyFilled) {
             CHECK(mask[static_cast<size_t>(row) * 5 + col]);
         }
     }
+}
+
+TEST_CASE(FillMajorityNeighborCells_ThreeOfFourNeighborsFillsTheCell) {
+    // 3x3 grid, center false with 3 of its 4 orthogonal neighbors true.
+    std::vector<bool> mask = {false, true, false, true, false, true, false, true, false};
+    FillMajorityNeighborCells(mask, 3);
+    CHECK(mask[4]); // center
+}
+
+TEST_CASE(FillMajorityNeighborCells_TwoOfFourNeighborsStaysFalse) {
+    // 3x3 grid, center false with only 2 of its 4 orthogonal neighbors true
+    // (top and left) -- below the 3-neighbor bar.
+    std::vector<bool> mask = {false, true, false, true, false, false, false, false, false};
+    FillMajorityNeighborCells(mask, 3);
+    CHECK(!mask[4]);
+}
+
+TEST_CASE(FillMajorityNeighborCells_CornerCellNeverFillsRegardlessOfNeighbors) {
+    // A corner cell has only 2 possible orthogonal neighbors, so it can
+    // never reach the 3-neighbor bar even when both are true.
+    std::vector<bool> mask = {false, true, true, true, true, true, true, true, true};
+    FillMajorityNeighborCells(mask, 3);
+    CHECK(!mask[0]); // top-left corner
+}
+
+TEST_CASE(FillMajorityNeighborCells_CascadesAlongAChainToConvergence) {
+    // 4x4 grid: rows 0, 2, and 3 fully true; row 1 is true only at its left
+    // end. Each false cell in row 1 reaches 3 true neighbors (up, down, and
+    // its now-filled left neighbor) only after the one before it has
+    // already been promoted -- this only fully resolves if the fill
+    // iterates to a fixed point rather than a single pass.
+    // clang-format off
+    std::vector<bool> mask = {
+        true,  true,  true,  true,
+        true,  false, false, false,
+        true,  true,  true,  true,
+        true,  true,  true,  true,
+    };
+    // clang-format on
+    FillMajorityNeighborCells(mask, 4);
+    for (bool cell : mask) CHECK(cell);
 }
 
 TEST_CASE(FillEnclosedMaskHoles_AllFalseGridHasNothingEnclosed) {

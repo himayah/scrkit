@@ -221,4 +221,25 @@ bool IsContentMaskSuspicious(const std::vector<bool>& mask, double threshold = 0
 // every side) is left alone.
 void FillEnclosedMaskHoles(std::vector<bool>& mask, int gridN);
 
+// In place: repeatedly promotes any `false` cell to `true` once at least 3
+// of its (up to 4) orthogonal neighbors are already `true`, iterating to a
+// fixed point (a newly-promoted cell can itself push a further neighbor
+// over the same bar). A corner cell (only 2 possible orthogonal neighbors)
+// can never reach 3 and is left alone either way.
+//
+// Complements FillEnclosedMaskHoles for misses that aren't *fully*
+// enclosed: a real window's own edge, title bar, or a thin text separator
+// line inside it can sit right where a large background region is only one
+// cell away and connected onward to the grid edge (so the strict enclosure
+// check above correctly leaves it alone) while still being surrounded on
+// 3 of its 4 sides by other flagged cells. Real-machine feedback (analysis
+// of debug_capture.bmp/debug_wallpaper.bmp, see spiral-saver-open-work
+// memory): spot-checking every cell this rule newly filled on one capture
+// (a window's rounded title-bar corner, a horizontal separator line inside
+// a terminal, a window edge against the wallpaper) confirmed each one was
+// genuinely inside real content, not visible background -- recovering
+// ~0.7% of the grid beyond what color, texture, and strict enclosure alone
+// found.
+void FillMajorityNeighborCells(std::vector<bool>& mask, int gridN);
+
 } // namespace core

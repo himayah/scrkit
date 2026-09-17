@@ -148,8 +148,14 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     // pre-fill (real-machine measurement: 75% -> 96% on one capture), which
     // would otherwise make that check trigger the Spotlight/slideshow retry
     // on completely ordinary desktops.
+    // Then close the remaining misses that aren't *fully* enclosed -- a
+    // window's own edge, title bar corner, or a thin separator line inside
+    // it, sitting one cell away from a large background region that's
+    // still connected onward to the grid edge (see
+    // FillMajorityNeighborCells's doc comment).
     if (haveMatchingCapture) {
         core::FillEnclosedMaskHoles(attempt.mask, gridN_);
+        core::FillMajorityNeighborCells(attempt.mask, gridN_);
     }
 
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;

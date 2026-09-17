@@ -291,4 +291,28 @@ void FillEnclosedMaskHoles(std::vector<bool>& mask, int gridN) {
     }
 }
 
+void FillMajorityNeighborCells(std::vector<bool>& mask, int gridN) {
+    if (gridN <= 0 || mask.size() != static_cast<size_t>(gridN) * gridN) return;
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int row = 0; row < gridN; ++row) {
+            for (int col = 0; col < gridN; ++col) {
+                const size_t idx = static_cast<size_t>(row) * gridN + col;
+                if (mask[idx]) continue;
+                int trueNeighbors = 0;
+                if (row > 0 && mask[idx - static_cast<size_t>(gridN)]) ++trueNeighbors;
+                if (row + 1 < gridN && mask[idx + static_cast<size_t>(gridN)]) ++trueNeighbors;
+                if (col > 0 && mask[idx - 1]) ++trueNeighbors;
+                if (col + 1 < gridN && mask[idx + 1]) ++trueNeighbors;
+                if (trueNeighbors >= 3) {
+                    mask[idx] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+}
+
 } // namespace core
