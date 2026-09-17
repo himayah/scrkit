@@ -255,6 +255,86 @@ TEST_CASE(ContentMask_UniformBrightnessOffsetDoesNotFlagPlainBackground) {
     }
 }
 
+namespace {
+// A flat `base` color with a sparse, evenly-spaced grid (every 3rd pixel on
+// both axes, ~11% of pixels) of near-black specks -- real per-pixel std
+// well above textureFlatnessMargin's default, but sparse and regular enough
+// that the box blur averages it down to a small, uniform offset from
+// `base` (well under pixelDiffThreshold) and the near-black speck pixels'
+// low luminance excludes them from ComputeRobustBrightnessGain's ratio
+// (keeping the gain at a neutral 1.0x) -- unlike a plain 50/50 checkerboard,
+// which pushes the gain to an extreme and contaminates these tests with the
+// *ordinary* diff-fraction check firing instead of isolating the texture-
+// flatness fallback this file wants to test. Models a dappled, detailed
+// wallpaper patch (leaf-light speckle, gravel, etc.).
+std::vector<uint8_t> SparseSpeckledBuffer(int width, int height, uint8_t base) {
+    auto buf = SolidBuffer(width, height, base, base, base);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (x % 3 == 0 && y % 3 == 0) {
+                uint8_t* p = &buf[(static_cast<size_t>(y) * width + x) * 4];
+                p[0] = p[1] = p[2] = 0;
+            }
+        }
+    }
+    return buf;
+}
+} // namespace
+
+TEST_CASE(ContentMask_TextureFlatnessCatchesAFlatWindowOnATexturedWallpaperPatch) {
+    // 64x64, gridN=1 (single cell). The wallpaper is speckled (real texture,
+    // std well above the default margin) while the capture is perfectly
+    // flat at the same base color -- a plain dark UI background
+    // coincidentally landing on a textured wallpaper patch's average
+    // brightness. The box blur washes the speckle down to a small, near-
+    // uniform offset, so the ordinary diff-fraction check alone stays well
+    // under threshold -- only the texture-flatness fallback should catch
+    // this.
+    const int width = 64, height = 64, gridN = 1;
+    auto wallpaper = SparseSpeckledBuffer(width, height, 100);
+    auto capture = SolidBuffer(width, height, 100, 100, 100);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(mask[0]);
+}
+
+TEST_CASE(ContentMask_TextureFlatnessDoesNotTriggerWhenCaptureIsTheMoreTexturedSide) {
+    // Same speckle-vs-flat setup, mirrored: the *capture* is the textured
+    // one and the wallpaper is flat. The margin (wallpaper std minus
+    // capture std) is then negative, so the texture-flatness fallback must
+    // not fire -- it only ever adds content, and only for the "suspiciously
+    // flatter than the wallpaper" direction.
+    const int width = 64, height = 64, gridN = 1;
+    auto capture = SparseSpeckledBuffer(width, height, 100);
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(!mask[0]);
+}
+
+TEST_CASE(ContentMask_TextureFlatnessMarginIsConfigurable) {
+    auto capture = SolidBuffer(64, 64, 100, 100, 100);
+    auto wallpaper = SparseSpeckledBuffer(64, 64, 100);
+
+    ContentMaskConfig config;
+    config.screenWidth = 64;
+    config.screenHeight = 64;
+    config.gridN = 1;
+    config.textureFlatnessMargin = 200.0f; // unreachably high
+    CHECK(!ComputeContentMask(capture.data(), wallpaper.data(), config)[0]);
+
+    config.textureFlatnessMargin = 5.0f; // comfortably below the speckle's actual std gap
+    CHECK(ComputeContentMask(capture.data(), wallpaper.data(), config)[0]);
+}
+
 TEST_CASE(ResampleRgba_NearestNeighborUpscalePicksSourcePixels) {
     // 2x1 source: left pixel red, right pixel blue.
     std::vector<uint8_t> src = {255, 0, 0, 255, 0, 0, 255, 255};

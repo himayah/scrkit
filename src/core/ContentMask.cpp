@@ -1,6 +1,7 @@
 #include "ContentMask.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <vector>
 
@@ -164,22 +165,51 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
 
             long long differing = 0;
             long long total = 0;
+            // Pooled (R,G,B all counted as separate samples) sum/sum-of-
+            // squares for the *raw* (unblurred) capture and gain-corrected
+            // wallpaper -- the textureFlatnessMargin fallback below needs
+            // real per-pixel texture, which the blur above deliberately
+            // smooths away.
+            double captureSum = 0.0, captureSumSq = 0.0;
+            double wallpaperSum = 0.0, wallpaperSumSq = 0.0;
             for (int y = y0; y < y1; ++y) {
                 const uint8_t* captureRow = blurredCapture.data() + static_cast<size_t>(y) * width * 4;
                 const uint8_t* wallpaperRow = blurredWallpaper.data() + static_cast<size_t>(y) * width * 4;
+                const uint8_t* rawCaptureRow = captureRgba + static_cast<size_t>(y) * width * 4;
+                const uint8_t* rawWallpaperRow = gainedWallpaper.data() + static_cast<size_t>(y) * width * 4;
                 for (int x = x0; x < x1; ++x) {
                     const uint8_t* c = captureRow + x * 4;
                     const uint8_t* w = wallpaperRow + x * 4;
                     const int diff = std::abs(c[0] - w[0]) + std::abs(c[1] - w[1]) + std::abs(c[2] - w[2]);
                     if (diff > config.pixelDiffThreshold) ++differing;
                     ++total;
+
+                    const uint8_t* rc = rawCaptureRow + x * 4;
+                    const uint8_t* rw = rawWallpaperRow + x * 4;
+                    for (int ch = 0; ch < 3; ++ch) {
+                        captureSum += rc[ch];
+                        captureSumSq += static_cast<double>(rc[ch]) * rc[ch];
+                        wallpaperSum += rw[ch];
+                        wallpaperSumSq += static_cast<double>(rw[ch]) * rw[ch];
+                    }
                 }
             }
 
-            if (total > 0 &&
-                static_cast<float>(differing) / static_cast<float>(total) >= config.cellDifferingFraction) {
-                mask[cellIndex] = true;
+            bool flagged = total > 0 &&
+                           static_cast<float>(differing) / static_cast<float>(total) >= config.cellDifferingFraction;
+
+            if (!flagged && total > 0) {
+                const double sampleCount = static_cast<double>(total) * 3.0;
+                const double captureMean = captureSum / sampleCount;
+                const double wallpaperMean = wallpaperSum / sampleCount;
+                const double captureVar = std::max(0.0, captureSumSq / sampleCount - captureMean * captureMean);
+                const double wallpaperVar =
+                    std::max(0.0, wallpaperSumSq / sampleCount - wallpaperMean * wallpaperMean);
+                const double margin = std::sqrt(wallpaperVar) - std::sqrt(captureVar);
+                flagged = margin >= config.textureFlatnessMargin;
             }
+
+            mask[cellIndex] = flagged;
         }
     }
     return mask;

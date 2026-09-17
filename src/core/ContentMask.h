@@ -79,6 +79,29 @@ struct ContentMaskConfig {
     // は対象になってしまっている"). 0.30 sits with a clear margin above
     // that texture-noise ceiling while staying far below real content's.
     float cellDifferingFraction = 0.30f;
+    // A cell that the color-diff check above still doesn't flag gets a
+    // second chance based on *texture*, not color: if the wallpaper there is
+    // at least this much more varied (higher pixel-value standard
+    // deviation, RGB samples pooled together) than the real capture, it's
+    // flagged as content anyway.
+    //
+    // Real windows -- a terminal, a dialog, browser chrome -- are almost
+    // always much flatter/more uniform than a photographic wallpaper, even
+    // in the wallpaper's own dark/shadowed patches; a plain dark UI
+    // background can coincidentally land close enough in *average* color to
+    // a shadowed patch of foliage or rock to dodge the diff check above
+    // entirely, without ever coming close to that patch's actual pixel-to-
+    // pixel texture. Real-machine feedback (analysis of debug_capture.bmp/
+    // debug_wallpaper.bmp, see spiral-saver-open-work memory) found a dark
+    // terminal window sitting on a shadowed tree/rock area this way -- well
+    // over half its cells excluded by color alone. Measuring std margin
+    // (wallpaper std minus capture std) across that same capture: cells
+    // that were already correctly excluded (real, matching background)
+    // clustered tightly near zero (median 0.43, 95th percentile 7.4), while
+    // the coincidentally-color-matched terminal cells sat at 20-40+. 20
+    // sits with a wide margin above that legitimate-background ceiling
+    // while comfortably catching the observed misses.
+    float textureFlatnessMargin = 20.0f;
 };
 
 // Returns gridN*gridN bools, in the same row-major cell order as
@@ -118,6 +141,14 @@ struct ContentMaskConfig {
 //    equally on both sides while leaving real content (icons, taskbar,
 //    open windows -- all much larger and starkly different) essentially
 //    untouched.
+//
+// A cell the diff above still doesn't flag gets one more chance via
+// `config.textureFlatnessMargin` (see its own doc comment): real UI is
+// almost always far flatter than a photographic wallpaper, even in the
+// wallpaper's own dark/shadowed patches, so a capture region that's
+// suspiciously *more uniform* than the wallpaper underneath it there is
+// still very likely real content that happened to land close in average
+// color, not an actual match.
 //
 // This is the raw per-cell diff only -- it does not fill enclosed holes
 // (see FillEnclosedMaskHoles). Callers that want the polished result should
