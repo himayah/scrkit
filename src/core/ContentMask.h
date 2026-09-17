@@ -94,14 +94,22 @@ struct ContentMaskConfig {
     // pixel texture. Real-machine feedback (analysis of debug_capture.bmp/
     // debug_wallpaper.bmp, see spiral-saver-open-work memory) found a dark
     // terminal window sitting on a shadowed tree/rock area this way -- well
-    // over half its cells excluded by color alone. Measuring std margin
-    // (wallpaper std minus capture std) across that same capture: cells
-    // that were already correctly excluded (real, matching background)
-    // clustered tightly near zero (median 0.43, 95th percentile 7.4), while
-    // the coincidentally-color-matched terminal cells sat at 20-40+. 20
-    // sits with a wide margin above that legitimate-background ceiling
-    // while comfortably catching the observed misses.
-    float textureFlatnessMargin = 20.0f;
+    // over half its cells excluded by color alone.
+    //
+    // Tuned once already (20 -> 15): measuring std margin (wallpaper std
+    // minus capture std) across a real capture, cells *outside* the
+    // offending window (genuine background) clustered tightly near zero
+    // (median 0.36, 95th percentile 3.8, 99th percentile 6.7 out of ~8000
+    // such cells), while the coincidentally-color-matched terminal cells
+    // ranged from single digits up into the 20s-40s. Sweeping the threshold
+    // against that same capture (including FillEnclosedMaskHoles's
+    // cascading effect, since recovering more cells can itself newly
+    // enclose others): 20 recovered the terminal to 88.8% coverage at a
+    // background-cell cost of 12; 15 reached 93.1% at a cost of 20 -- a
+    // clearly worthwhile trade. Below that the curve flattens fast (12 ->
+    // 93.7% / 29, 10 -> 94.1% / 45, 8 -> 94.4% / 75), diminishing returns for
+    // a fast-rising false-positive cost, so 15 is where this stopped.
+    float textureFlatnessMargin = 15.0f;
 };
 
 // Returns gridN*gridN bools, in the same row-major cell order as
