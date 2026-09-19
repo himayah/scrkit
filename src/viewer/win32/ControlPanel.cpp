@@ -138,13 +138,13 @@ bool ControlPanel::Create(HWND parent, HINSTANCE instance) {
     lf.lfWeight = FW_BOLD;
     boldFont_ = CreateFontIndirectW(&lf);
 
-    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN,
+    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                             0, 0, 100, 100, parent, nullptr, instance, this);
     return hwnd_ != nullptr;
 }
 
 HWND ControlPanel::MakeChild(const wchar_t* cls, const std::wstring& text, DWORD style, int id, DWORD exStyle) {
-    HWND h = CreateWindowExW(exStyle, cls, text.c_str(), style | WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, hwnd_,
+    HWND h = CreateWindowExW(exStyle, cls, text.c_str(), style | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 10, 10, hwnd_,
                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_, nullptr);
     if (h) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     return h;
@@ -386,7 +386,8 @@ void ControlPanel::Relayout() {
 
         int y = kMargin - scrollPos_;
         auto place = [](HWND h, int x, int yy, int w, int hgt) {
-            if (h) SetWindowPos(h, nullptr, x, yy, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
+            // NOCOPYBITS: after a scroll/resize, don't carry the old pixels along to the new spot.
+            if (h) SetWindowPos(h, nullptr, x, yy, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         };
         for (Row& row : rows_) {
             if (!row.visible) continue;
@@ -441,6 +442,9 @@ void ControlPanel::Relayout() {
         SetScrollInfo(hwnd_, SB_VERT, &si, TRUE);
         break;
     }
+    // Controls moved (scroll position reset, window resized, rows shown/hidden): repaint the
+    // panel and every child from scratch so no ghost of an earlier layout is left behind.
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 void ControlPanel::SendSet(const std::string& id, JsonValue value) {

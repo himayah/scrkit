@@ -80,6 +80,7 @@ void LayoutChildren() {
     MoveWindow(g.host, 0, 0, hostW, bodyH, TRUE);
     MoveWindow(g.panel.hwnd(), hostW, 0, panelW, bodyH, TRUE);
     MoveWindow(g.status, 0, bodyH, w, kStatusHeight, TRUE);
+    InvalidateRect(g.status, nullptr, TRUE);
 
     // Let the saver's window follow the host if it advertises viewport.resize.
     if (g.client && g.client->state() == scrapi::ClientCore::State::Ready && g.client->viewportHandle() != 0 &&

@@ -330,7 +330,10 @@ void RunPreview(HINSTANCE instance, HWND previewParent, const std::wstring& scra
     ctx.mode = WindowMode::Preview;
     ctx.previewParent = previewParent;
 
-    HWND hwnd = CreateWindowExW(0, kWindowClassName, L"", WS_CHILD | WS_VISIBLE, 0, 0, width, height,
+    // An OpenGL window should clip against its siblings/children, or the driver may paint
+    // over neighboring windows; that matters once the viewer puts other controls beside it.
+    const DWORD clipStyle = scrapiPipeName.empty() ? 0 : (WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
+    HWND hwnd = CreateWindowExW(0, kWindowClassName, L"", WS_CHILD | WS_VISIBLE | clipStyle, 0, 0, width, height,
                                  previewParent, nullptr, instance, nullptr);
     if (!hwnd) {
         core::Logger::Error("RunPreview: CreateWindowExW failed");
