@@ -75,6 +75,9 @@ public:
     void SetCaptureHost(HWND previewWindow) { captureHost_ = previewWindow; }
     // Re-runs the current content source ("Capture again" for the real desktop).
     void RefreshContent() { ApplyContentSource(contentSource_); }
+    // Diagnostics: writes the last real desktop capture and the wallpaper reference the mask diff used
+    // as BMPs into the app's data folder (debug_capture.bmp, debug_reference.bmp).
+    void DumpDebugImages() const;
     // Reseeds the random source and starts the show over (both layers, from the beginning).
     void Restart(uint32_t seed);
     // One-line description of what the foreground currently contains.
@@ -146,6 +149,7 @@ private:
     std::string contentInfo_ = "none";
     std::string contentSource_ = "sample";
     HWND captureHost_ = nullptr;
+    DecodedImage lastCapture_;             // the last real desktop capture (for the debug dump)
     std::wstring wallpaperPath_;           // for recompositing the wallpaper against a fresh capture
     uint8_t desktopColor_[3] = {30, 40, 60};
     bool previewMode_ = false;

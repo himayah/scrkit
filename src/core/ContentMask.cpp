@@ -811,4 +811,57 @@ BoundaryRefinement FinishContentMask(const uint8_t* captureRgba, const uint8_t* 
     return refinement;
 }
 
+ReferenceComparison CompareReference(const uint8_t* captureRgba, const uint8_t* referenceRgba, int width, int height) {
+    ReferenceComparison out;
+    if (!captureRgba || !referenceRgba || width < 16 || height < 16) return out;
+    double sumC[3] = {0, 0, 0}, sumR[3] = {0, 0, 0};
+    long long count = 0;
+    for (int y = 0; y < height; y += 4) {
+        for (int x = 0; x < width; x += 4) {
+            const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+            for (int c = 0; c < 3; ++c) {
+                sumC[c] += captureRgba[i + c];
+                sumR[c] += referenceRgba[i + c];
+            }
+            ++count;
+        }
+    }
+    for (int c = 0; c < 3; ++c) {
+        out.meanCapture[c] = sumC[c] / count;
+        out.meanReference[c] = sumR[c] / count;
+    }
+
+    // Luminance of 16x16 blocks, then Pearson correlation between the two block sequences.
+    std::vector<double> a, b;
+    for (int by = 0; by + 16 <= height; by += 16) {
+        for (int bx = 0; bx + 16 <= width; bx += 16) {
+            double la = 0, lb = 0;
+            for (int y = by; y < by + 16; y += 2) {
+                for (int x = bx; x < bx + 16; x += 2) {
+                    const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+                    la += 0.299 * captureRgba[i] + 0.587 * captureRgba[i + 1] + 0.114 * captureRgba[i + 2];
+                    lb += 0.299 * referenceRgba[i] + 0.587 * referenceRgba[i + 1] + 0.114 * referenceRgba[i + 2];
+                }
+            }
+            a.push_back(la / 64.0);
+            b.push_back(lb / 64.0);
+        }
+    }
+    double ma = 0, mb = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        ma += a[i];
+        mb += b[i];
+    }
+    ma /= a.size();
+    mb /= b.size();
+    double sab = 0, saa = 0, sbb = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        sab += (a[i] - ma) * (b[i] - mb);
+        saa += (a[i] - ma) * (a[i] - ma);
+        sbb += (b[i] - mb) * (b[i] - mb);
+    }
+    out.luminanceCorrelation = (saa > 0 && sbb > 0) ? sab / std::sqrt(saa * sbb) : 0.0;
+    return out;
+}
+
 } // namespace core

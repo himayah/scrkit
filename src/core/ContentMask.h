@@ -31,6 +31,17 @@ void ResampleRgba(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW
 // shows -- and comparing such a reference with a real capture flags nearly every pixel.
 void ResampleRgbaSmooth(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH);
 
+// How well a wallpaper reference resembles the capture *as a picture* (diagnostics): mean color of
+// each, and the correlation of their luminance over 16x16-pixel blocks. ~1.0 with equal means: the
+// same image, aligned. High correlation but different means: a brightness/tone difference. Low
+// correlation: a different image, fit mode, or position.
+struct ReferenceComparison {
+    double meanCapture[3] = {0, 0, 0};
+    double meanReference[3] = {0, 0, 0};
+    double luminanceCorrelation = 0.0;
+};
+ReferenceComparison CompareReference(const uint8_t* captureRgba, const uint8_t* referenceRgba, int width, int height);
+
 // Which of `gridN` evenly-distributed cells covering [0, totalSize) a given
 // pixel coordinate falls into -- the exact inverse of the cell-boundary
 // convention core::ComputeContentMask uses internally (cell k spans

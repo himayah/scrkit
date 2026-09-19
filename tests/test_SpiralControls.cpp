@@ -442,7 +442,7 @@ TEST_CASE(SpiralManifest_ContentAndSimulationControlsExist) {
     const Manifest m = BuildSpiralManifest(fx::MakeDefaultEngineConfig(), "t");
     std::string error;
     CHECK(scrapi::ValidateManifest(m, &error));
-    for (const char* id : {"content.source", "content.refresh", "mask.overlay", "content.info", "scrapi.seed", "scrapi.restart"}) {
+    for (const char* id : {"content.source", "content.refresh", "debug.dump", "mask.overlay", "content.info", "scrapi.seed", "scrapi.restart"}) {
         CHECK(scrapi::FindControl(m, id) != nullptr);
     }
     CHECK(scrapi::FindControl(m, "group.content")->presentation == "collapsed");

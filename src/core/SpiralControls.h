@@ -33,6 +33,7 @@ struct SpiralHostHooks {
     std::function<void(uint32_t seed)> restart;
     std::function<std::string()> contentInfo; // shown in the `content.info` readout
     std::function<void()> refreshContent;     // "Capture again": rebuild from the current source
+    std::function<void()> dumpDebug;          // "Save debug images": write the capture and the reference to disk
 };
 
 class SpiralControlBinder {

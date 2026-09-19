@@ -19,6 +19,7 @@ core::SpiralHostHooks HooksFor(AppController& app) {
     h.restart = [&app](uint32_t seed) { app.Restart(seed); };
     h.contentInfo = [&app] { return app.ContentInfo(); };
     h.refreshContent = [&app] { app.RefreshContent(); };
+    h.dumpDebug = [&app] { app.DumpDebugImages(); };
     return h;
 }
 } // namespace

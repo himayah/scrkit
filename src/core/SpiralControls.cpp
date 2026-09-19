@@ -230,10 +230,16 @@ Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string
     refresh.type = ControlType::Button;
     refresh.label = "Capture again";
     refresh.visibleWhen = Eq("content.source", JsonValue::String("desktop"));
+    ControlNode dump;
+    dump.id = "debug.dump";
+    dump.type = ControlType::Button;
+    dump.label = "Save debug images";
+    dump.description = "Writes the captured desktop and the wallpaper reference to the saver's data folder";
+    dump.visibleWhen = Eq("content.source", JsonValue::String("desktop"));
     ControlNode overlay = Bool("mask.overlay", "Mask overlay", false);
     overlay.description = "Tint the cells detected as content and outline the window rectangles";
     ControlNode info = Readout("content.info", "Detected");
-    ControlNode contentGroup = Group("group.content", "Content", {source, refresh, overlay, info});
+    ControlNode contentGroup = Group("group.content", "Content", {source, refresh, dump, overlay, info});
     contentGroup.presentation = "collapsed";
     m.controls.push_back(std::move(contentGroup));
 
@@ -426,6 +432,10 @@ bool SpiralControlBinder::OnInvoke(const std::string& id, const JsonValue&, std:
     }
     if (id == "content.refresh") {
         if (host_.refreshContent) host_.refreshContent();
+        return true;
+    }
+    if (id == "debug.dump") {
+        if (host_.dumpDebug) host_.dumpDebug();
         return true;
     }
     if (id == "scrapi.restart") {

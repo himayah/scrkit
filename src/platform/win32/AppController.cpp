@@ -5,11 +5,14 @@
 #include <random>
 #include <vector>
 
+#include "../../core/Bmp.h"
 #include "../../core/ContentMask.h"
 #include "../../core/SampleDesktop.h"
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
+#include "AppPaths.h"
 #include "OpenGLContext.h"
+#include "WinFileIO.h"
 #include "ScreenCapture.h"
 #include "WallpaperProvider.h"
 #include "WindowRects.h"
@@ -450,9 +453,34 @@ void AppController::CaptureDesktopContent() {
                                      GetSystemWallpaperFitMode(), desktopColor_[0], desktopColor_[1], desktopColor_[2],
                                      capture.rgba.data());
     wallpaperRgba_ = aligned.rgba;
+    lastCapture_ = capture;
+    {
+        const core::ReferenceComparison cmp = core::CompareReference(capture.rgba.data(), aligned.rgba.data(), screenWidth_, screenHeight_);
+        char buf[220];
+        std::snprintf(buf, sizeof(buf),
+                      "Reference vs capture: mean capture=(%.0f,%.0f,%.0f) reference=(%.0f,%.0f,%.0f) luminance-correlation=%.3f fit-mode=%d",
+                      cmp.meanCapture[0], cmp.meanCapture[1], cmp.meanCapture[2], cmp.meanReference[0], cmp.meanReference[1],
+                      cmp.meanReference[2], cmp.luminanceCorrelation, static_cast<int>(GetSystemWallpaperFitMode()));
+        core::Logger::Info(buf);
+    }
     if (backgroundTexture_ != 0) glDeleteTextures(1, &backgroundTexture_);
     backgroundTexture_ = CreateTextureFromImage(aligned);
     SetForegroundContent(&capture, rects, &labels);
+}
+
+void AppController::DumpDebugImages() const {
+    const std::wstring dir = GetAppDataDirectory();
+    if (dir.empty() || lastCapture_.rgba.empty()) {
+        core::Logger::Warn("AppController: no desktop capture to dump (choose Desktop first)");
+        return;
+    }
+    auto write = [&](const wchar_t* name, const uint8_t* rgba) {
+        const std::vector<uint8_t> bmp = core::EncodeBmp24(rgba, screenWidth_, screenHeight_);
+        const bool ok = WriteTextFileW(dir + L"\\" + name, std::string(bmp.begin(), bmp.end()));
+        core::Logger::Info(std::string("AppController: debug image ") + (ok ? "written" : "FAILED"));
+    };
+    write(L"debug_capture.bmp", lastCapture_.rgba.data());
+    if (wallpaperRgba_.size() == lastCapture_.rgba.size()) write(L"debug_reference.bmp", wallpaperRgba_.data());
 }
 
 void AppController::ApplyContentSource(const std::string& source) {
