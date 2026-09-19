@@ -321,3 +321,115 @@ TEST_CASE(SimulationClock_Semantics) {
     CHECK_NEAR(c.Advance(0.1f), SimulationClock::kStepSeconds, 1e-6f);
     CHECK_NEAR(c.Advance(0.1f), 0.0f, 1e-6f);
 }
+
+namespace {
+struct HostLog {
+    std::vector<std::string> sources;
+    std::vector<bool> overlays;
+    std::vector<uint32_t> restarts;
+    std::string info = "412 cells, 3 windows";
+};
+
+core::SpiralHostHooks HooksFor(HostLog& log) {
+    core::SpiralHostHooks h;
+    h.setContentSource = [&log](const std::string& s) { log.sources.push_back(s); };
+    h.setMaskOverlay = [&log](bool on) { log.overlays.push_back(on); };
+    h.restart = [&log](uint32_t seed) { log.restarts.push_back(seed); };
+    h.contentInfo = [&log] { return log.info; };
+    return h;
+}
+
+// Same wiring as SpiralRig, but with host hooks.
+struct HostRig {
+    HostLog log;
+    Mt19937RandomSource rng{7};
+    fx::EffectEngine engine;
+    SimulationClock clock;
+    SpiralControlBinder binder;
+    std::deque<std::string> toServer, toClient;
+    ServerCore server;
+    ClientCore client;
+
+    HostRig()
+        : engine(fx::MakeDefaultEngineConfig(), rng),
+          binder(engine, clock, HooksFor(log)),
+          server(BuildSpiralManifest(engine.Config(), "t"), binder.Hooks(), [this](const std::string& l) { toClient.push_back(l); }),
+          client([this](const std::string& l) { toServer.push_back(l); }) {
+        binder.Attach(server);
+        engine.SetLayers(MakeLayer(LayerKind::Foreground), MakeLayer(LayerKind::Background));
+        engine.OnPhaseEntered(SaverState::STATE_CONTENT);
+        client.StartSession("test");
+        Pump();
+    }
+    void Pump() {
+        for (int guard = 0; guard < 1000 && (!toServer.empty() || !toClient.empty()); ++guard) {
+            while (!toServer.empty()) {
+                std::string l = std::move(toServer.front());
+                toServer.pop_front();
+                server.HandleLine(l);
+            }
+            while (!toClient.empty()) {
+                std::string l = std::move(toClient.front());
+                toClient.pop_front();
+                client.OnLine(l);
+            }
+        }
+    }
+    void Set(const std::string& id, JsonValue v) {
+        client.Set({{id, std::move(v)}});
+        Pump();
+    }
+};
+} // namespace
+
+TEST_CASE(SpiralHost_InitialStateAppliesTheDefaultsOnce) {
+    HostRig rig;
+    rig.binder.ApplyInitialState();
+    CHECK_EQ(rig.log.sources.size(), static_cast<size_t>(1));
+    CHECK(rig.log.sources[0] == "sample");
+    CHECK_EQ(rig.log.overlays.size(), static_cast<size_t>(1));
+    CHECK(rig.log.overlays[0] == false);
+}
+
+TEST_CASE(SpiralHost_ContentSourceAndOverlayControlsReachTheHost) {
+    HostRig rig;
+    rig.Set("content.source", JsonValue::String("none"));
+    rig.Set("mask.overlay", JsonValue::Bool(true));
+    CHECK_EQ(rig.log.sources.size(), static_cast<size_t>(1));
+    CHECK(rig.log.sources[0] == "none");
+    CHECK_EQ(rig.log.overlays.size(), static_cast<size_t>(1));
+    CHECK(rig.log.overlays[0] == true);
+}
+
+TEST_CASE(SpiralHost_SeedChangeAndRestartButtonRestartWithTheSeed) {
+    HostRig rig;
+    rig.Set("scrapi.seed", JsonValue::Int(777));
+    CHECK_EQ(rig.log.restarts.size(), static_cast<size_t>(1));
+    CHECK_EQ(rig.log.restarts[0], static_cast<uint32_t>(777));
+
+    bool ok = false;
+    rig.client.Invoke("scrapi.restart", JsonValue::Null(), [&](const ClientCore::Reply& r) { ok = r.ok; });
+    rig.Pump();
+    CHECK(ok);
+    CHECK_EQ(rig.log.restarts.size(), static_cast<size_t>(2));
+    CHECK_EQ(rig.log.restarts[1], static_cast<uint32_t>(777)); // the current seed
+}
+
+TEST_CASE(SpiralHost_ContentInfoIsPublishedAsAReadout) {
+    HostRig rig;
+    rig.binder.PublishStatus();
+    rig.server.Flush(1000.0);
+    rig.Pump();
+    CHECK(rig.client.model()->Get("content.info")->AsString() == "412 cells, 3 windows");
+}
+
+TEST_CASE(SpiralManifest_ContentAndSimulationControlsExist) {
+    const Manifest m = BuildSpiralManifest(fx::MakeDefaultEngineConfig(), "t");
+    std::string error;
+    CHECK(scrapi::ValidateManifest(m, &error));
+    for (const char* id : {"content.source", "mask.overlay", "content.info", "scrapi.seed", "scrapi.restart"}) {
+        CHECK(scrapi::FindControl(m, id) != nullptr);
+    }
+    CHECK(scrapi::FindControl(m, "group.content")->presentation == "collapsed");
+    CHECK(m.HasCapability("scrapi.seed") && m.HasCapability("scrapi.restart"));
+}

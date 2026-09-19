@@ -127,7 +127,7 @@ JSON 内の改行は `\n` にエスケープする。手動デバッグ(テキ�
 
 | type | 値の型 | 固有プロパティ | 推奨ウィジェット |
 |---|---|---|---|
-| `group` | -(値なし) | `children[]`, `presentation`: `section`(既定)/`tab`/`collapsible` | 見出し・タブ・折りたたみ |
+| `group` | -(値なし) | `children[]`, `presentation`: `section`(既定)/`tab`/`collapsible`/`collapsed`(折りたたみ可で、最初は閉じている) | 見出し・タブ・折りたたみ |
 | `enum` | 文字列(`value`) | `options:[{value,label,description?}]`, `presentation`: `dropdown`(既定)/`radio`/`list` | プルダウン・ラジオボタン・リスト |
 | `flags` | 文字列の配列 | `options`(同上) | チェックボックス群 |
 | `bool` | true/false | - | チェックボックス・トグル |

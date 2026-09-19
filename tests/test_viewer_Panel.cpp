@@ -494,3 +494,19 @@ TEST_CASE(Panel_ThemesDifferButShareStructure) {
     dark.SetViewport(392, 800);
     CHECK_NEAR(dark.ContentHeight(), rig.panel.ContentHeight(), 1e-3f);
 }
+
+TEST_CASE(Panel_GroupsMarkedCollapsedStartClosedAndOpenOnClick) {
+    Rig rig = Rig::Spiral();
+    CHECK(rig.panel.IsCollapsed("group.content"));
+    Rect r;
+    CHECK(!rig.panel.ControlRect("content.source", r));   // inside a closed card
+    CHECK(!rig.panel.IsCollapsed("group.bg"));            // the others start open
+    Rect header;
+    CHECK(rig.panel.HeaderRect("group.content", header));
+    rig.Click(header);
+    CHECK(!rig.panel.IsCollapsed("group.content"));
+    CHECK(rig.panel.ControlRect("content.source", r));
+    // and it stays as the user left it across relayouts
+    rig.panel.ValuesChanged();
+    CHECK(!rig.panel.IsCollapsed("group.content"));
+}

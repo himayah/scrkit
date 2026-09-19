@@ -186,6 +186,8 @@ void PanelController::Layout() {
         if (!model_->IsVisible(node.id)) continue;
         const float top = y;
         if (node.type == ControlType::Group) {
+            // A group may ask to start closed (presentation "collapsed"); after that the user decides.
+            if (!collapsed_.count(node.id)) collapsed_[node.id] = node.presentation == "collapsed";
             Item h;
             h.kind = Item::Kind::CardHeader;
             h.node = &node;

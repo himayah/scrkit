@@ -5,6 +5,8 @@
 // unit-testable without Windows; the Win32 side only supplies the transport and
 // the frame loop.
 
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -22,9 +24,23 @@ namespace core {
 // configuration). The result passes scrapi::ValidateManifest.
 scrapi::Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string& version);
 
+// What the host application (the SCRAPI preview) implements for the controls that go beyond
+// the effect engine: which desktop content the foreground shows, the mask debug overlay, and
+// restarting with a seed. All optional; a missing one makes that control a no-op.
+struct SpiralHostHooks {
+    std::function<void(const std::string& source)> setContentSource; // "sample" | "none"
+    std::function<void(bool on)> setMaskOverlay;
+    std::function<void(uint32_t seed)> restart;
+    std::function<std::string()> contentInfo; // shown in the `content.info` readout
+};
+
 class SpiralControlBinder {
 public:
-    SpiralControlBinder(fx::EffectEngine& engine, SimulationClock& clock);
+    SpiralControlBinder(fx::EffectEngine& engine, SimulationClock& clock, SpiralHostHooks host = {});
+
+    // Applies the model's initial values of the host-backed controls (content source, overlay)
+    // once, after Attach: the manifest's defaults are the state the preview should start in.
+    void ApplyInitialState();
 
     // Must be called once, before any request is handled: the binder reads the current
     // values of related controls (mode + effect + loop flag make one directive) from
@@ -47,6 +63,7 @@ private:
 
     fx::EffectEngine& engine_;
     SimulationClock& clock_;
+    SpiralHostHooks host_;
     scrapi::ServerCore* server_ = nullptr;
 };
 

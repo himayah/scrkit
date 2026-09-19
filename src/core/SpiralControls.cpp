@@ -84,6 +84,16 @@ ControlNode Float(const std::string& id, const std::string& label, double min, d
     return n;
 }
 
+ControlNode Bool(const std::string& id, const std::string& label, bool def) {
+    ControlNode n;
+    n.id = id;
+    n.type = ControlType::Bool;
+    n.label = label;
+    n.hasDefault = true;
+    n.defaultValue = JsonValue::Bool(def);
+    return n;
+}
+
 ControlNode Readout(const std::string& id, const std::string& label) {
     ControlNode n;
     n.id = id;
@@ -191,7 +201,7 @@ ControlNode EffectParamGroup(LayerKind layer, EffectId id, const fx::EffectParam
 Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string& version) {
     Manifest m;
     m.saver = {"jp.himayah.spiral-suction-saver", "Spiral Suction Saver", version};
-    m.capabilities = {"scrapi.paused", "scrapi.timeScale", "scrapi.step", "viewport.resize"};
+    m.capabilities = {"scrapi.paused", "scrapi.timeScale", "scrapi.step", "scrapi.seed", "scrapi.restart", "viewport.resize"};
 
     m.controls.push_back(LayerGroup(LayerKind::Background, defaults.background, defaults.backgroundDirective));
     m.controls.push_back(LayerGroup(LayerKind::Foreground, defaults.foreground, defaults.foregroundDirective));
@@ -202,6 +212,24 @@ Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string
         for (EffectId id : LayerEffects(layer)) params.push_back(EffectParamGroup(layer, id, fx::ParamsFor(layerConfig, id)));
     }
     m.controls.push_back(Group("group.effectParams", "Effect parameters", std::move(params)));
+
+    // What the foreground layer shows. The preview has no real screen capture, so it gets a
+    // built-in sample desktop (or nothing).
+    ControlNode source;
+    source.id = "content.source";
+    source.type = ControlType::Enum;
+    source.label = "Foreground content";
+    source.presentation = "radio";
+    source.options = {Opt("sample", "Sample desktop", "A built-in desktop: two windows, icons and a taskbar"),
+                      Opt("none", "None", "An empty foreground layer")};
+    source.hasDefault = true;
+    source.defaultValue = JsonValue::String("sample");
+    ControlNode overlay = Bool("mask.overlay", "Mask overlay", false);
+    overlay.description = "Tint the cells detected as content and outline the window rectangles";
+    ControlNode info = Readout("content.info", "Detected");
+    ControlNode contentGroup = Group("group.content", "Content", {source, overlay, info});
+    contentGroup.presentation = "collapsed";
+    m.controls.push_back(std::move(contentGroup));
 
     ControlNode paused;
     paused.id = "scrapi.paused";
@@ -219,14 +247,41 @@ Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string
     step.label = "Step one frame";
     step.enabledWhen = Eq("scrapi.paused", JsonValue::Bool(true));
 
-    m.controls.push_back(Group("group.simulation", "Simulation", {paused, timeScale, step}));
+    ControlNode seed;
+    seed.id = "scrapi.seed";
+    seed.type = ControlType::Int;
+    seed.label = "Seed";
+    seed.description = "The same seed and settings replay the same show; changing it restarts";
+    seed.hasMin = seed.hasMax = true;
+    seed.min = 0;
+    seed.max = 2147483647.0;
+    seed.hasDefault = true;
+    seed.defaultValue = JsonValue::Int(12345);
+
+    ControlNode restart;
+    restart.id = "scrapi.restart";
+    restart.type = ControlType::Button;
+    restart.label = "Restart";
+
+    m.controls.push_back(Group("group.simulation", "Simulation", {paused, timeScale, step, seed, restart}));
     return m;
 }
 
 // ---------------------------------------------------------------------------
 
-SpiralControlBinder::SpiralControlBinder(fx::EffectEngine& engine, SimulationClock& clock)
-    : engine_(engine), clock_(clock) {}
+SpiralControlBinder::SpiralControlBinder(fx::EffectEngine& engine, SimulationClock& clock, SpiralHostHooks host)
+    : engine_(engine), clock_(clock), host_(std::move(host)) {}
+
+void SpiralControlBinder::ApplyInitialState() {
+    if (!server_) return;
+    const ControlModel& model = server_->model();
+    if (const JsonValue* v = model.Get("content.source")) {
+        if (host_.setContentSource) host_.setContentSource(v->AsString());
+    }
+    if (const JsonValue* v = model.Get("mask.overlay")) {
+        if (host_.setMaskOverlay) host_.setMaskOverlay(v->AsBool());
+    }
+}
 
 void SpiralControlBinder::Attach(ServerCore& server) { server_ = &server; }
 
@@ -293,6 +348,18 @@ void SpiralControlBinder::OnSet(const std::vector<ServerCore::Change>& changes) 
             clock_.SetTimeScale(static_cast<float>(ch.value.AsDouble(1.0)));
             continue;
         }
+        if (id == "content.source") {
+            if (host_.setContentSource) host_.setContentSource(ch.value.AsString());
+            continue;
+        }
+        if (id == "mask.overlay") {
+            if (host_.setMaskOverlay) host_.setMaskOverlay(ch.value.AsBool());
+            continue;
+        }
+        if (id == "scrapi.seed") {
+            if (host_.restart) host_.restart(static_cast<uint32_t>(ch.value.AsInt(0)));
+            continue;
+        }
 
         if (id.rfind("fx.", 0) == 0) {
             // fx.<EffectId>.<property>
@@ -351,6 +418,11 @@ bool SpiralControlBinder::OnInvoke(const std::string& id, const JsonValue&, std:
         clock_.RequestStep();
         return true;
     }
+    if (id == "scrapi.restart") {
+        const JsonValue* seed = server_ ? server_->model().Get("scrapi.seed") : nullptr;
+        if (host_.restart) host_.restart(static_cast<uint32_t>(seed ? seed->AsInt(0) : 0));
+        return true;
+    }
     if (error) *error = "unsupported action '" + id + "'";
     return false;
 }
@@ -364,6 +436,7 @@ void SpiralControlBinder::PublishStatus() {
                           JsonValue::String(status.hasEffect ? fx::EffectIdToString(status.effect) : "(none)"));
         server_->SetValue(p + ".state", JsonValue::String(fx::FxStateToString(status.state)));
     }
+    if (host_.contentInfo) server_->SetValue("content.info", JsonValue::String(host_.contentInfo()));
 }
 
 } // namespace core
