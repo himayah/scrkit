@@ -53,12 +53,17 @@ private:
         std::vector<HWND> items; // radio buttons / flag checkboxes, one per option
         COLORREF color = 0;    // color controls
         bool visible = true;
+        bool enabled = true;
         int height = 0;
     };
 
     void CreateRow(const scrapi::ControlNode& node, int depth);
     void UpdateWidget(Row& row);
-    void ApplyVisibility();
+    // Re-evaluates every control's visibleWhen/enabledWhen. Only what actually changed is
+    // touched, and the (expensive) relayout+repaint only happens if some row was shown or
+    // hidden -- this runs on every value update, including the readouts the saver streams.
+    // `force` (after a rebuild) applies the state to every row unconditionally.
+    void ApplyVisibility(bool force = false);
     // fullRedraw=false is for scrolling: children are moved in one batch with their pixels
     // copied along, and nothing is invalidated wholesale (a per-step erase+repaint starves
     // WM_PAINT during a drag and leaves the panel blank). fullRedraw=true (resize, rows
@@ -86,6 +91,7 @@ private:
     InvokeFn onInvoke_;
     int scrollPos_ = 0;
     int contentHeight_ = 0;
+    bool batching_ = false; // Rebuild in progress: defer the full repaint to the end, once
     bool updating_ = false; // suppress edits echoing back while we set widget values
     std::map<std::string, scrapi::JsonValue> pendingSliders_;
 };

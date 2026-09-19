@@ -190,8 +190,12 @@ void ControlPanel::Rebuild(const scrapi::ControlModel* model) {
     } walker{*this};
     walker.Visit(model_->manifest().controls, 0);
 
+    // Build everything with a single layout and a single full repaint at the end.
+    batching_ = true;
     for (Row& row : rows_) UpdateWidget(row);
-    ApplyVisibility();
+    ApplyVisibility(/*force=*/true);
+    batching_ = false;
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 void ControlPanel::CreateRow(const ControlNode& node, int depth) {
@@ -356,15 +360,20 @@ void ControlPanel::Refresh(const std::vector<std::string>& changedIds) {
     ApplyVisibility();
 }
 
-void ControlPanel::ApplyVisibility() {
+void ControlPanel::ApplyVisibility(bool force) {
     if (!model_) {
         Relayout();
         return;
     }
+    bool layoutChanged = force;
     for (Row& row : rows_) {
         const std::string& id = row.node->id;
-        row.visible = model_->IsVisible(id);
+        const bool visible = model_->IsVisible(id);
         const bool enabled = model_->IsEnabled(id) && !(row.node->readOnly && row.node->type != ControlType::Readout);
+        if (!force && visible == row.visible && enabled == row.enabled) continue;
+        if (visible != row.visible) layoutChanged = true;
+        row.visible = visible;
+        row.enabled = enabled;
         const int show = row.visible ? SW_SHOWNA : SW_HIDE;
         auto apply = [&](HWND h) {
             if (!h) return;
@@ -376,7 +385,7 @@ void ControlPanel::ApplyVisibility() {
         apply(row.aux);
         for (HWND h : row.items) apply(h);
     }
-    Relayout();
+    if (layoutChanged) Relayout();
 }
 
 void ControlPanel::Relayout(bool fullRedraw) {
@@ -457,7 +466,7 @@ void ControlPanel::Relayout(bool fullRedraw) {
         SetScrollInfo(hwnd_, SB_VERT, &si, TRUE);
         break;
     }
-    if (fullRedraw) {
+    if (fullRedraw && !batching_) {
         // Window resized / rows shown or hidden / rebuilt: repaint the panel and every child
         // from scratch so no ghost of an earlier layout is left behind.
         RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
