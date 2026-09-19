@@ -159,7 +159,8 @@ private:
 
     // Rebuilds the foreground layer from `capture` (null = empty): mask, texture, cells, and hands
     // the new layer to the engine. `candidateRects` are window rectangles for the mask pipeline.
-    void SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects);
+    void SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects,
+                               const std::vector<std::string>* candidateLabels = nullptr);
     core::fx::LayerSource MakeForegroundSource(const std::vector<int>& cellIndices, bool hasContent) const;
     void DrawMaskOverlay() const;
     void CaptureDesktopContent();

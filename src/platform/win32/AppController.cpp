@@ -1,6 +1,7 @@
 #include "AppController.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <random>
 #include <vector>
 
@@ -14,6 +15,30 @@
 #include "WindowRects.h"
 
 namespace platform {
+
+namespace {
+
+std::string RectLabel(const WindowInfo& w) {
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "%d,%d..%d,%d class='%s' ex=0x%lx", w.rect.left, w.rect.top, w.rect.right, w.rect.bottom,
+                  w.className.c_str(), w.exStyle);
+    return buf;
+}
+
+// The mask chain's decisions, written to the log so a wrong result (a bogus window rectangle, a flood)
+// can be diagnosed from saver.log instead of guessed at.
+void LogMaskDiagnostics(const char* what, const core::ContentMaskStats& s, const std::vector<std::string>* labels,
+                        const std::vector<bool>& accepted) {
+    core::Logger::Info(std::string("Mask (") + what + ") cells: raw=" + std::to_string(s.raw) + " +rects=" + std::to_string(s.afterRects) +
+                        " +enclosed=" + std::to_string(s.afterEnclosed) + " +majority=" + std::to_string(s.afterMajority) +
+                        " +refine=" + std::to_string(s.afterRefine) + " +straddle=" + std::to_string(s.afterStraddle));
+    if (!labels) return;
+    for (size_t i = 0; i < labels->size(); ++i) {
+        core::Logger::Info(std::string("  window ") + (i < accepted.size() && accepted[i] ? "[used]     " : "[rejected] ") + (*labels)[i]);
+    }
+}
+
+} // namespace
 
 AppController::~AppController() { Shutdown(); }
 
@@ -177,13 +202,20 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         // The mask's post-processing chain (window rectangles from the OS as corroborating
         // geometry, hole filling, sub-cell boundary refinement, ...): core::FinishContentMask.
         // Runs on the raw mask, before any hole filling inflates the evidence.
+        const std::vector<WindowInfo> windows = EnumerateVisibleWindows(screenWidth_, screenHeight_);
+        std::vector<core::PixelRect> candidateRects;
+        std::vector<std::string> labels;
+        for (const WindowInfo& w : windows) {
+            candidateRects.push_back(w.rect);
+            labels.push_back(RectLabel(w));
+        }
         std::vector<core::PixelRect> usedRects;
+        std::vector<bool> accepted;
+        core::ContentMaskStats stats;
         boundaryRefinement = core::FinishContentMask(desktopCapture->rgba.data(), attempt.compositedWallpaper.rgba.data(),
-                                                       attempt.mask, attempt.differingFraction,
-                                                       EnumerateVisibleWindowRects(screenWidth_, screenHeight_), maskConfig,
-                                                       &usedRects);
-        core::Logger::Info("AppController: " + std::to_string(usedRects.size()) +
-                            " window rectangle(s) applied to the content mask");
+                                                       attempt.mask, attempt.differingFraction, candidateRects, maskConfig,
+                                                       &usedRects, &accepted, &stats);
+        LogMaskDiagnostics("screensaver", stats, &labels, accepted);
     }
 
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
@@ -322,7 +354,8 @@ core::fx::LayerSource AppController::MakeForegroundSource(const std::vector<int>
     return layer;
 }
 
-void AppController::SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects) {
+void AppController::SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects,
+                                          const std::vector<std::string>* candidateLabels) {
     if (!effectEngine_) return;
     if (foregroundTexture_ != 0) {
         glDeleteTextures(1, &foregroundTexture_);
@@ -342,8 +375,11 @@ void AppController::SetForegroundContent(const DecodedImage* capture, const std:
         std::vector<float> differing;
         std::vector<bool> mask = core::ComputeContentMask(capture->rgba.data(), wallpaperRgba_.data(), cfg, &differing);
         std::vector<core::PixelRect> used;
-        core::BoundaryRefinement refinement =
-            core::FinishContentMask(capture->rgba.data(), wallpaperRgba_.data(), mask, differing, candidateRects, cfg, &used);
+        std::vector<bool> accepted;
+        core::ContentMaskStats stats;
+        core::BoundaryRefinement refinement = core::FinishContentMask(capture->rgba.data(), wallpaperRgba_.data(), mask, differing,
+                                                                        candidateRects, cfg, &used, &accepted, &stats);
+        LogMaskDiagnostics("preview", stats, candidateLabels, accepted);
 
         for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
             if (!mask[i]) continue;
@@ -381,7 +417,14 @@ void AppController::CaptureDesktopContent() {
     }
     DecodedImage capture;
     const bool captured = CaptureScreenToImage(screenWidth_, screenHeight_, capture);
-    const std::vector<core::PixelRect> rects = captured ? EnumerateVisibleWindowRects(screenWidth_, screenHeight_) : std::vector<core::PixelRect>();
+    std::vector<core::PixelRect> rects;
+    std::vector<std::string> labels;
+    if (captured) {
+        for (const WindowInfo& w : EnumerateVisibleWindows(screenWidth_, screenHeight_)) {
+            rects.push_back(w.rect);
+            labels.push_back(RectLabel(w));
+        }
+    }
     if (hide) ShowWindow(root, SW_SHOWNA);
 
     if (!captured) {
@@ -408,7 +451,7 @@ void AppController::CaptureDesktopContent() {
     wallpaperRgba_ = aligned.rgba;
     if (backgroundTexture_ != 0) glDeleteTextures(1, &backgroundTexture_);
     backgroundTexture_ = CreateTextureFromImage(aligned);
-    SetForegroundContent(&capture, rects);
+    SetForegroundContent(&capture, rects, &labels);
 }
 
 void AppController::ApplyContentSource(const std::string& source) {

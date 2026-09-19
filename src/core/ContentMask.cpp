@@ -503,34 +503,69 @@ void FillBoundaryStraddlingCells(std::vector<bool>& mask, const std::vector<floa
 }
 
 std::vector<PixelRect> SelectEvidencedRects(const std::vector<bool>& rawMask, const std::vector<PixelRect>& rects,
-                                             const ContentMaskConfig& config) {
+                                             const ContentMaskConfig& config, std::vector<bool>* accepted) {
     std::vector<PixelRect> kept;
+    if (accepted) accepted->assign(rects.size(), false);
     const int n = config.gridN;
     const int width = config.screenWidth;
     const int height = config.screenHeight;
     if (n <= 0 || width <= 0 || height <= 0 || rawMask.size() != static_cast<size_t>(n) * n) return kept;
 
-    for (const PixelRect& rect : rects) {
-        const PixelRect clipped{std::max(rect.left, 0), std::max(rect.top, 0), std::min(rect.right, width),
-                                std::min(rect.bottom, height)};
+    // Clip to the screen, dropping empty rectangles and exact duplicates (the first one stands).
+    struct Candidate {
+        PixelRect rect;
+        size_t index;
+    };
+    std::vector<Candidate> cands;
+    for (size_t i = 0; i < rects.size(); ++i) {
+        const PixelRect clipped{std::max(rects[i].left, 0), std::max(rects[i].top, 0), std::min(rects[i].right, width),
+                                std::min(rects[i].bottom, height)};
         if (clipped.right <= clipped.left || clipped.bottom <= clipped.top) continue;
+        bool duplicate = false;
+        for (const Candidate& c : cands) {
+            duplicate = duplicate || (c.rect.left == clipped.left && c.rect.top == clipped.top && c.rect.right == clipped.right &&
+                                       c.rect.bottom == clipped.bottom);
+        }
+        if (!duplicate) cands.push_back({clipped, i});
+    }
 
-        long long total = 0, flagged = 0;
-        for (int row = 0; row < n; ++row) {
-            const int y0 = (row * height) / n;
-            const int y1 = ((row + 1) * height) / n;
-            for (int col = 0; col < n; ++col) {
-                const int x0 = (col * width) / n;
-                const int x1 = ((col + 1) * width) / n;
-                if (!RegionCenterInAnyRect({clipped}, x0, x1, y0, y1)) continue;
-                ++total;
-                if (rawMask[static_cast<size_t>(row) * n + col]) ++flagged;
+    enum class Verdict { Pending, Accepted, Rejected };
+    std::vector<Verdict> verdict(cands.size(), Verdict::Pending);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (size_t k = 0; k < cands.size(); ++k) {
+            if (verdict[k] != Verdict::Pending) continue;
+            long long total = 0, flagged = 0;
+            for (int row = 0; row < n; ++row) {
+                const int y0 = (row * height) / n;
+                const int y1 = ((row + 1) * height) / n;
+                for (int col = 0; col < n; ++col) {
+                    const int x0 = (col * width) / n;
+                    const int x1 = ((col + 1) * width) / n;
+                    if (!RegionCenterInAnyRect({cands[k].rect}, x0, x1, y0, y1)) continue;
+                    bool shared = false;
+                    for (size_t other = 0; other < cands.size() && !shared; ++other) {
+                        shared = other != k && verdict[other] != Verdict::Rejected &&
+                                 RegionCenterInAnyRect({cands[other].rect}, x0, x1, y0, y1);
+                    }
+                    if (shared) continue; // covered by another live candidate: says nothing about this one
+                    ++total;
+                    if (rawMask[static_cast<size_t>(row) * n + col]) ++flagged;
+                }
             }
+            if (total == 0) continue; // undecided for now (it may lie inside a candidate that gets rejected)
+            if (static_cast<float>(flagged) / static_cast<float>(total) >= config.rectMinEvidenceFraction) {
+                verdict[k] = Verdict::Accepted;
+            } else {
+                verdict[k] = Verdict::Rejected;
+            }
+            changed = true;
         }
-        if (total == 0) continue;
-        if (static_cast<float>(flagged) / static_cast<float>(total) >= config.rectMinEvidenceFraction) {
-            kept.push_back(clipped);
-        }
+    }
+    for (size_t k = 0; k < cands.size(); ++k) {
+        if (verdict[k] != Verdict::Accepted) continue;
+        kept.push_back(cands[k].rect);
+        if (accepted) (*accepted)[cands[k].index] = true;
     }
     return kept;
 }
@@ -619,14 +654,28 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
 BoundaryRefinement FinishContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, std::vector<bool>& mask,
                                       const std::vector<float>& differingFraction,
                                       const std::vector<PixelRect>& candidateRects, const ContentMaskConfig& config,
-                                      std::vector<PixelRect>* usedRects) {
-    const std::vector<PixelRect> rects = SelectEvidencedRects(mask, candidateRects, config);
+                                      std::vector<PixelRect>* usedRects, std::vector<bool>* candidateAccepted,
+                                      ContentMaskStats* stats) {
+    auto count = [&]() {
+        int k = 0;
+        for (bool b : mask) k += b ? 1 : 0;
+        return k;
+    };
+    ContentMaskStats local;
+    local.raw = count();
+    const std::vector<PixelRect> rects = SelectEvidencedRects(mask, candidateRects, config, candidateAccepted);
     ForceRectsIntoMask(mask, rects, config);
+    local.afterRects = count();
     FillEnclosedMaskHoles(mask, config.gridN);
+    local.afterEnclosed = count();
     FillMajorityNeighborCells(mask, config.gridN);
+    local.afterMajority = count();
     BoundaryRefinement refinement = RefineBoundaryMask(captureRgba, wallpaperRgba, mask, config, rects);
+    local.afterRefine = count();
     FillBoundaryStraddlingCells(mask, differingFraction, config.gridN);
+    local.afterStraddle = count();
     if (usedRects) *usedRects = rects;
+    if (stats) *stats = local;
     return refinement;
 }
 

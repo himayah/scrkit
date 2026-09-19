@@ -1012,3 +1012,85 @@ TEST_CASE(WindowRects_MismatchedMaskSizeIsANoop) {
     for (bool cell : tooSmall) CHECK(!cell);
     CHECK(SelectEvidencedRects(tooSmall, {scene.window}, scene.config).empty());
 }
+
+namespace {
+// A 640x640 screen, 32x32 grid (20px cells): flagged cells are simulated directly in a raw mask.
+ContentMaskConfig RectScene() {
+    ContentMaskConfig c;
+    c.screenWidth = 640;
+    c.screenHeight = 640;
+    c.gridN = 32;
+    return c;
+}
+void Flag(std::vector<bool>& mask, int gridN, int col0, int row0, int col1, int row1) {
+    for (int r = row0; r < row1; ++r) {
+        for (int c = col0; c < col1; ++c) mask[static_cast<size_t>(r) * gridN + c] = true;
+    }
+}
+} // namespace
+
+TEST_CASE(WindowRects_ATransparentOverlayCannotBorrowTheEvidenceOfTheWindowsItSpans) {
+    // Real-machine bug: an invisible window whose rectangle spans two real windows and a large stretch
+    // of plain wallpaper was accepted (it "contained" plenty of flagged cells), which forced nearly the
+    // whole screen to content (11828 of 11881 cells). Its own, exclusive area is only wallpaper.
+    const ContentMaskConfig cfg = RectScene();
+    std::vector<bool> raw(32 * 32, false);
+    Flag(raw, 32, 2, 2, 12, 10);   // real window A, cells (2..12, 2..10)
+    Flag(raw, 32, 16, 4, 28, 14);  // real window B
+    const PixelRect windowA{40, 40, 240, 200};
+    const PixelRect windowB{320, 80, 560, 280};
+    const PixelRect overlay{0, 0, 640, 640}; // spans everything, including open wallpaper
+
+    std::vector<bool> accepted;
+    const auto kept = SelectEvidencedRects(raw, {windowA, windowB, overlay}, cfg, &accepted);
+    CHECK_EQ(kept.size(), static_cast<size_t>(2));
+    CHECK(accepted[0]);
+    CHECK(accepted[1]);
+    CHECK(!accepted[2]);
+}
+
+TEST_CASE(WindowRects_PartiallyOverlappingRealWindowsAreBothAccepted) {
+    const ContentMaskConfig cfg = RectScene();
+    std::vector<bool> raw(32 * 32, false);
+    Flag(raw, 32, 2, 2, 18, 14);   // A's visible strip plus B's area
+    const PixelRect a{40, 40, 300, 240};   // cells 2..15 x 2..12
+    const PixelRect b{200, 120, 400, 300}; // overlaps A's lower-right corner
+    std::vector<bool> accepted;
+    const auto kept = SelectEvidencedRects(raw, {a, b}, cfg, &accepted);
+    CHECK_EQ(kept.size(), static_cast<size_t>(2)); // each has exclusive cells with content
+}
+
+TEST_CASE(WindowRects_IdenticalRectanglesCountOnceAndAnEnclosedOneIsDropped) {
+    const ContentMaskConfig cfg = RectScene();
+    std::vector<bool> raw(32 * 32, false);
+    Flag(raw, 32, 4, 4, 20, 20);
+    const PixelRect outer{80, 80, 400, 400};
+    const PixelRect inner{160, 160, 300, 300};
+    std::vector<bool> accepted;
+    auto kept = SelectEvidencedRects(raw, {outer, outer, inner}, cfg, &accepted);
+    CHECK_EQ(kept.size(), static_cast<size_t>(1));   // the duplicate collapsed, the inner one has no exclusive cells
+    CHECK(accepted[0]);
+    CHECK(!accepted[1]);
+    CHECK(!accepted[2]);
+}
+
+TEST_CASE(FinishContentMask_ReportsStageCountsAndVerdicts) {
+    const int w = 640, h = 640;
+    auto wall = SolidBuffer(w, h, 90, 90, 90);
+    auto cap = wall;
+    FillRect(cap, w, 40, 40, 240, 200, 250, 250, 250); // one real window
+    ContentMaskConfig cfg = RectScene();
+    std::vector<float> diff;
+    auto mask = ComputeContentMask(cap.data(), wall.data(), cfg, &diff);
+    std::vector<PixelRect> used;
+    std::vector<bool> verdict;
+    core::ContentMaskStats stats;
+    FinishContentMask(cap.data(), wall.data(), mask, diff, {PixelRect{40, 40, 240, 200}, PixelRect{0, 0, 640, 640}}, cfg, &used,
+                      &verdict, &stats);
+    CHECK_EQ(used.size(), static_cast<size_t>(1));
+    CHECK(verdict.size() == 2 && verdict[0] && !verdict[1]);
+    CHECK(stats.raw > 0);
+    CHECK(stats.afterRects >= stats.raw);
+    CHECK(stats.afterStraddle >= stats.raw);
+    CHECK(stats.afterStraddle < 32 * 32 / 2); // the window, not the screen
+}

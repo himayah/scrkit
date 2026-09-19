@@ -370,8 +370,20 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
 // invisible helper window, a window mid-fade -- which would otherwise turn
 // plain wallpaper into "content". A rectangle too small to contain any cell
 // center is dropped too (nothing to force, and too little to vouch for it).
+//
+// The evidence is counted only over the rectangle's EXCLUSIVE cells: those inside it and inside no
+// other candidate still in play. Counting all its cells let a large invisible window (a transparent
+// overlay, a hidden helper) that merely spans real windows and open wallpaper borrow their evidence
+// and get accepted, turning nearly the whole screen into "content" (seen on a real desktop: 99.6% of
+// cells). A real window has content of its own where nothing else is; an overlay's exclusive area is
+// just wallpaper. A candidate with no exclusive cells at all (it lies inside another) is undecided
+// rather than failed: candidates that fail are removed first and the rest re-counted, so real windows
+// inside a bogus overlay are still accepted once the overlay is gone. Whatever is still undecided at
+// the end sits inside an accepted rectangle and is dropped (that one already forces the area);
+// identical rectangles count once (the first is kept). `accepted`, if given, is resized to
+// rects.size() and marks the kept ones.
 std::vector<PixelRect> SelectEvidencedRects(const std::vector<bool>& rawMask, const std::vector<PixelRect>& rects,
-                                             const ContentMaskConfig& config);
+                                             const ContentMaskConfig& config, std::vector<bool>* accepted = nullptr);
 
 // In place: marks every cell whose center lies inside any rectangle of
 // `rects` as content. The point of the whole exercise: a real window is an
@@ -394,9 +406,15 @@ void ForceRectsIntoMask(std::vector<bool>& mask, const std::vector<PixelRect>& r
 // straddling-cell fill. `mask` is ComputeContentMask's raw result (with `differingFraction`),
 // modified in place. Returns the sub-cell refinement; `usedRects`, if given, receives the
 // rectangles that were trusted. Shared by the real saver and the SCRAPI preview.
+// Flagged-cell counts after each stage of FinishContentMask, for diagnostics.
+struct ContentMaskStats {
+    int raw = 0, afterRects = 0, afterEnclosed = 0, afterMajority = 0, afterRefine = 0, afterStraddle = 0;
+};
+
 BoundaryRefinement FinishContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, std::vector<bool>& mask,
                                       const std::vector<float>& differingFraction,
                                       const std::vector<PixelRect>& candidateRects, const ContentMaskConfig& config,
-                                      std::vector<PixelRect>* usedRects = nullptr);
+                                      std::vector<PixelRect>* usedRects = nullptr,
+                                      std::vector<bool>* candidateAccepted = nullptr, ContentMaskStats* stats = nullptr);
 
 } // namespace core

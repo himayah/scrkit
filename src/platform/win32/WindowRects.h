@@ -12,6 +12,7 @@
 // Like the screen capture, this only *reads* window bounds; it never moves,
 // resizes, or otherwise touches a window (要件.txt §10).
 
+#include <string>
 #include <vector>
 
 #include <windows.h>
@@ -19,6 +20,18 @@
 #include "../../core/ContentMask.h"
 
 namespace platform {
+
+// A candidate window as found: its rectangle plus enough identity to diagnose a wrong one
+// (class name and extended style only -- window titles can be private and are not read).
+struct WindowInfo {
+    core::PixelRect rect;
+    std::string className;
+    unsigned long exStyle = 0;
+};
+
+// Same enumeration as EnumerateVisibleWindowRects, with each window's identity, in the OS's
+// top-to-bottom z-order.
+std::vector<WindowInfo> EnumerateVisibleWindows(int screenWidth, int screenHeight);
 
 // Returns the visible-frame rectangle of every visible, non-minimized,
 // non-cloaked top-level window not owned by this process, clipped to
