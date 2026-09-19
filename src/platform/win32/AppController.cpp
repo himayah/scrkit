@@ -108,7 +108,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 
     WallpaperAttempt attempt = tryWallpaper(wallpaperPath);
 
-    // Real-machine investigation (see spiral-saver-open-work memory) traced
+    // Real-machine investigation traced
     // "holes"/false-positive content to Windows Spotlight/slideshow desktop
     // backgrounds: GetSystemWallpaperPath() (SPI_GETDESKWALLPAPER) can
     // return a path that no longer matches what's actually on screen, so the

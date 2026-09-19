@@ -6,9 +6,11 @@
 // for how that diff decides which grid cells count as content).
 //
 // This is a read-only pixel capture (GDI BitBlt from the desktop DC) taken
-// once, before the saver's own window covers the screen. It never queries
-// or touches real icon/window positions or state -- it only reads the
-// already-rendered screen image, same as a screenshot tool would
+// once, before the saver's own window covers the screen. It never moves,
+// resizes, or otherwise touches real icons or windows -- it only reads the
+// already-rendered screen image, same as a screenshot tool would (window
+// bounds are read separately, and only as corroborating geometry, by
+// platform::EnumerateVisibleWindowRects)
 // (要件.txt 禁止事項: 実際のデスクトップを操作してはならない、は引き続き
 // 遵守 -- ここでは「操作」ではなく単純な画面読み取りのみを行う).
 

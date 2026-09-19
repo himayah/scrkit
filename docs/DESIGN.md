@@ -49,6 +49,7 @@ flowchart TB
         AppController --> Renderer
         AppController --> ImageLoader
         AppController --> WallpaperProvider
+        AppController --> WindowRects
         AppController --> HueRingBuilder
         ConfigDialogWin32 --> OpenGLContext
         WinMain --> ConfigDialogWin32
@@ -71,7 +72,7 @@ flowchart TB
 |---|---|
 | `SpiralMath` | θ+=dTheta, r-=speed のらせん軌道計算 (要件§4, §7)。`SpiralState`/`SpiralParams`/`StepSpiral`。`SpiralParams::centerAccelFactor`(>0)で中心に近づくほど角速度が増し、らせん状に歪む(追加要望対応、既定0で従来どおり)。`MakeParamsForRevolutions(r0, suctionSpeed, targetRevolutions)`は、開始半径`r0`から逆算したdThetaを返し、r0の大小にかかわらずほぼ指定回転数で中心に消えるようにする(追加要望: らせん回転をもっと緩やかにし3〜5周回するくらいにする)。 |
 | `SuctionCenterWalker` | 吸い込み中心のランダムウォーク (1〜3px/frame 相当、画面端で反射)。`IRandomSource` を注入して決定的にテスト可能。 |
-| `ContentMask` | 実画面キャプチャと壁紙画像をグリッドセル単位で差分判定し、「差分ブロック(=実際のアイコン/タスクバー/開いているウィンドウなど)」のセルだけを`true`にした`bool`配列を返す。比較対象の壁紙画像は`WallpaperFit`で画面サイズへ合成済みのものを渡す。比較前に(1)各ピクセルの輝度比の中央値による明るさ補正(`ComputeRobustBrightnessGain`、HDR等による明るさのズレを吸収しつつ実コンテンツの混在に頑健)、(2)両画像への同じボックスブラー(`BoxBlurRgb`、独立デコード・縮小パイプラインによる質感ノイズを両側で均等に打ち消す)を適用する (§9.8)。Windows非依存の純粋関数群。 |
+| `ContentMask` | 実画面キャプチャと壁紙画像をグリッドセル単位で差分判定し、「差分ブロック(=実際のアイコン/タスクバー/開いているウィンドウなど)」のセルだけを`true`にした`bool`配列を返す。比較対象の壁紙画像は`WallpaperFit`で画面サイズへ合成済みのものを渡す。比較前に(1)各ピクセルの輝度比の中央値による明るさ補正(`ComputeRobustBrightnessGain`、HDR等による明るさのズレを吸収しつつ実コンテンツの混在に頑健)、(2)両画像への同じボックスブラー(`BoxBlurRgb`、独立デコード・縮小パイプラインによる質感ノイズを両側で均等に打ち消す)を適用する (§9.8)。さらに、境界セルのピクセル単位の再評価(`RefineBoundaryMask`, §9.11)と、OSが報告した実ウィンドウ矩形のうちピクセル差分が裏付けたもの(`SelectEvidencedRects`)の内部を強制的に上物にする処理(`ForceRectsIntoMask`、§9.12)を提供する。Windows非依存の純粋関数群。 |
 | `WallpaperFit` | Windowsの壁紙表示設定(中央/タイル/ストレッチ/フィット/塗りつぶし/スパン)をそれぞれ再現して壁紙画像を画面サイズへ合成する`CompositeWallpaper`。単純な引き伸ばしは「ストレッチ」にしか一致しないため、`ContentMask`の比較基準を実際の表示と正しく合わせるために必要 (§9.2)。`CompositeWallpaperAligned`は`Fill`/`Span`について、cover-scale後に生じるクロップの位置を中央と決め打ちせず、実キャプチャと最も一致する位置を探索して採用する(Windows Spotlight等のオフセンターな「スマートクロップ」に対応、§9.8)。`AppController`はこの合成結果を`ContentMask`の比較用と実際の背景描画テクスチャの両方に使う。Windows非依存の純粋関数群。 |
 | `ParticleGrid` | 背景画像を NxN 粒子に分割 (要件§5)。`ComputeGridDimensionForParticleCount` が希望粒子数から N を逆算。差分ブロックフェーズもこの同じグリッドを`ContentMask`で絞り込んだ部分集合を使う。 |
 | `StateMachine` | `STATE_CONTENT→BACKGROUND→BLACK→FADE→RESET→CONTENT` の純粋な遷移関数 (要件§8)。`STATE_CONTENT`は旧`STATE_ICONS`/`STATE_WINDOWS`を統合したもの(§9参照)。 |
@@ -103,6 +104,7 @@ flowchart TB
 | `Renderer` | 固定機能OpenGLの描画バッチ関数群。既存の`DrawFullscreenTexturedQuad`/`DrawParticlesBatched`(`STATE_FADE`/`STATE_RESET`用に残存)に加え、`core::fx::FrameDrawList`を解釈する`ExecuteDrawList`(→ DESIGN_EFFECTS.md §7.2)を持つ。 |
 | `ImageLoader` | Windows Imaging Component (WIC) でBMP/JPEG/PNG/GIFをデコードしGLテクスチャ化。外部画像ライブラリ不要。`CreateMaskedTextureFromImage`(差分なしセルのアルファを0にした上物テクスチャ)・`CreateTextureFromRgba`(色相リング用)も提供する。 |
 | `ScreenCapture` | `BitBlt`で画面を1回読み取り`DecodedImage`化。`AppController`がこれを壁紙画像と差分判定し、差分ブロックのテクスチャとしても使う。読み取り専用。 |
+| `WindowRects` | `EnumWindows`と`DwmGetWindowAttribute`で、可視・非最小化・非cloakedな他プロセスのトップレベルウィンドウ(タスクバー含む)の矩形を取得し、キャプチャと同じ座標系(DPI非対応時は換算)で返す。`ContentMask`の補助証拠としてのみ使い(§9.12)、位置を読み取るだけで移動・操作はしない。 |
 | `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得(読み取り専用)。パスが空(壁紙が画像ではなく単色背景に設定されている場合、Windowsはエラーではなく空文字列を返す)の場合に備え、`GetSysColor(COLOR_DESKTOP)`で実際の単色背景色を取得する`GetSystemDesktopColor`も提供する。また`HKCU\Control Panel\Desktop`の`WallpaperStyle`/`TileWallpaper`(読み取り専用)から実際の壁紙表示設定を判定する`GetSystemWallpaperFitMode`も提供し、`core::WallpaperFit`に渡す。 |
 | `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。「Effects...」ボタンからエフェクトシステム専用のダイアログ(→ DESIGN_EFFECTS.md §9.5)を開ける。 |
 | `HueRingBuilder` | HueShiftエフェクト用の色相回転テクスチャをワーカースレッドで事前生成する(→ DESIGN_EFFECTS.md §6.2.8.1)。GL呼び出しは主スレッドのみ。 |
@@ -232,7 +234,8 @@ ctest --test-dir build-tests --output-on-failure
 `MakeParamsForRevolutions`の目標回転数への収束と極小半径時のフォールバック、
 `SuctionCenterWalker` の境界反射、`StateMachine` の全遷移経路、
 `ParticleGrid` の件数・範囲、`ContentMask` の差分判定(同一/差分セルのみ検出/閾値未満は
-無視)とリサンプルの正しさ、`WallpaperFit` の各表示スタイル(中央/タイル/ストレッチ/
+無視)・穴埋め・境界セルの再帰的再評価(`RefineBoundaryMask`)・ウィンドウ矩形による
+補完(白い窓×白い壁紙の合成シーン)とリサンプルの正しさ、`WallpaperFit` の各表示スタイル(中央/タイル/ストレッチ/
 フィット/塗りつぶし)の合成結果とレターボックス色、`ConfigModel` のini往復変換と不正値
 フォールバック、
 `GpuTierClassifier` の既知ベンダ文字列分類、`RandomSource` の値域。
@@ -319,7 +322,8 @@ Win32/OpenGL実装はLinux開発機でコンパイルできないため、GitHub
    の乱数レイアウトの代わりに使うよう変更。重なったウィンドウ/アイコンの見た目のずれ対策として、
    さらに`PrintWindow`で個別ウィンドウ・アイコン層ごとにキャプチャする仕組みも追加した。
 3. **(今回)実機で試したところ2の個別クエリ方式は期待した見た目にならなかった**ため、
-   個別のアイコン/ウィンドウ矩形という抽象化そのものをやめ、**画面全体のキャプチャと
+   個別のアイコン/ウィンドウ矩形という抽象化そのものをやめ(**ただし後に§9.12で、ウィンドウ
+   矩形の取得のみを、差分判定を補助する外部証拠として再導入している**)、**画面全体のキャプチャと
    壁紙画像の差分だけで「差分ブロック」を決める**方式に置き換えた
    (`EnumWindows`/アイコン`ListView`読み取り/`PrintWindow`個別キャプチャ、および
    `DesktopElements`/`TextRenderer`は削除)。`core::ContentMask`が実画面キャプチャと

@@ -6,7 +6,12 @@
 // any OS. Replaces the earlier per-window/per-icon query approach (querying
 // individual window/icon positions via EnumWindows and the desktop's icon
 // ListView, and capturing each individually via PrintWindow), which did not
-// hold up in practice on a real machine.
+// hold up in practice on a real machine as the *primary* source of what to
+// animate. The pixel diff below is still what decides what counts as content;
+// real window rectangles (platform::EnumerateVisibleWindowRects) come back
+// only as corroborating geometry (SelectEvidencedRects/ForceRectsIntoMask), to
+// keep a window's interior opaque where its pixels happen to match the
+// wallpaper and the diff therefore has no evidence there at all.
 
 #include <cstdint>
 #include <unordered_map>
@@ -59,9 +64,8 @@ struct ContentMaskConfig {
     // along mountain ridgelines, tree lines, etc.) purely from being decoded
     // and scaled by a different pipeline (this code's own WIC decode) than
     // whatever rendered the real screen -- real-machine feedback (analysis
-    // of debug_capture.bmp/debug_wallpaper.bmp, see spiral-saver-open-work
-    // memory) found ~38% of pixels in that "moderate" 24-400 diff band vs.
-    // only ~16% in a "near-total mismatch" band that corresponded to actual
+    // of saved capture/wallpaper dumps of a real desktop) found ~38% of
+    // pixels in that "moderate" 24-400 diff band vs. only ~16% in a "near-total mismatch" band that corresponded to actual
     // real content (an open window, desktop icons). 90 sits above that
     // texture-noise band while staying far below the stark contrast a real
     // UI element produces against a photo background.
@@ -70,7 +74,7 @@ struct ContentMaskConfig {
     // of its pixels differ. Widened twice now (0.03 -> 0.12 -> 0.30): after
     // fixing the visible background render to use the same properly-fit
     // wallpaper as the diff (see AppController::Initialize), real-machine
-    // analysis of debug_capture.bmp/debug_wallpaper.bmp still found the
+    // analysis of saved capture/wallpaper dumps of a real desktop still found the
     // busiest textured regions (a snow-capped mountain range) sitting at
     // ~17-19% of pixels over pixelDiffThreshold -- comfortably below real
     // content's actual rate (icons/taskbar/an open window measured at
@@ -92,10 +96,10 @@ struct ContentMaskConfig {
     // background can coincidentally land close enough in *average* color to
     // a shadowed patch of foliage or rock to dodge the diff check above
     // entirely, without ever coming close to that patch's actual pixel-to-
-    // pixel texture. Real-machine feedback (analysis of debug_capture.bmp/
-    // debug_wallpaper.bmp, see spiral-saver-open-work memory) found a dark
-    // terminal window sitting on a shadowed tree/rock area this way -- well
-    // over half its cells excluded by color alone.
+    // pixel texture. Real-machine feedback (analysis of saved capture/
+    // wallpaper dumps of a real desktop) found a dark terminal window
+    // sitting on a shadowed tree/rock area this way -- well over half its
+    // cells excluded by color alone.
     //
     // Tuned once already (20 -> 15): measuring std margin (wallpaper std
     // minus capture std) across a real capture, cells *outside* the
@@ -253,8 +257,7 @@ void FillEnclosedMaskHoles(std::vector<bool>& mask, int gridN);
 // cell away and connected onward to the grid edge (so the strict enclosure
 // check above correctly leaves it alone) while still being surrounded on
 // 3 of its 4 sides by other flagged cells. Real-machine feedback (analysis
-// of debug_capture.bmp/debug_wallpaper.bmp, see spiral-saver-open-work
-// memory): spot-checking every cell this rule newly filled on one capture
+// of saved capture/wallpaper dumps of a real desktop): spot-checking every cell this rule newly filled on one capture
 // (a window's rounded title-bar corner, a horizontal separator line inside
 // a terminal, a window edge against the wallpaper) confirmed each one was
 // genuinely inside real content, not visible background -- recovering
