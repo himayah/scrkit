@@ -85,6 +85,19 @@ std::optional<EffectPick> Pick(EffectKind kind, LayerKind layer, const EngineCon
     if (!engine.enabled) return std::nullopt;
 
     const LayerEffectConfig& layerConfig = LayerConfigFor(engine, layer);
+
+    // External-control override (see LayerDirective): Rest yields no candidate
+    // at all; Pin yields exactly the pinned effect when it is of the requested
+    // kind, bypassing the enabled flag, weights and the recent-history
+    // exclusion (a pinned effect must be able to repeat back-to-back).
+    const LayerDirective directive = ActiveDirectiveFor(engine, layer);
+    if (directive.mode == LayerMode::Rest) return std::nullopt;
+    if (directive.mode == LayerMode::Pin) {
+        const auto pinnedKind = EffectKindOn(layer, directive.pinned);
+        if (!pinnedKind || *pinnedKind != kind) return std::nullopt;
+        return MakePick(directive.pinned, layerConfig, rng);
+    }
+
     const std::vector<EffectId>& scripted = ScriptedFor(engine, layer);
     if (!scripted.empty()) return PickScripted(scripted, kind, layer, layerConfig, history, rng);
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "EffectCatalog.h"
 #include "EffectRegistry.h"
 #include "ForegroundMeshBuilder.h"
 
@@ -84,10 +85,49 @@ void EffectEngine::UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerC
         // the Terminal/Empty half, which otherwise has no path back to
         // Entering on its own). A genuinely empty layer (no real desktop
         // content) is left alone -- there's nothing to reappear.
-        if (rt.layer.kind == LayerKind::Foreground && !rt.layer.empty) {
+        //
+        // External-control override (LayerDirective): a pinned terminal that
+        // just finished either re-runs (loopTerminal) or leaves the layer at
+        // rest, on both layers -- the background never self-resets otherwise.
+        const LayerDirective directive = ActiveDirectiveFor(config_, rt.layer.kind);
+        const bool pinnedTerminal = directive.mode == LayerMode::Pin &&
+                                     EffectKindOn(rt.layer.kind, directive.pinned) == EffectKind::Terminal;
+        if (pinnedTerminal && !directive.loopTerminal) {
+            rt.sm->ForceRest();
+        } else if (pinnedTerminal) {
+            rt.sm->Reset(EmptyReason::NotEmpty);
+        } else if (rt.layer.kind == LayerKind::Foreground && !rt.layer.empty) {
             rt.sm->Reset(rt.layer.emptyReason);
         }
     }
+}
+
+void EffectEngine::SetDirective(LayerKind layer, const LayerDirective& directive) {
+    LayerRuntime& rt = layer == LayerKind::Foreground ? fg_ : bg_;
+    (layer == LayerKind::Foreground ? config_.foregroundDirective : config_.backgroundDirective) = directive;
+
+    const FxState before = rt.sm->Current();
+    rt.sm->Interrupt();
+    // Interrupt() moved a running effect into Exiting synchronously; the effect
+    // itself has to be told (Step() only reports transitions it made itself).
+    if (rt.sm->Current() == FxState::Exiting && before != FxState::Exiting && rt.current) {
+        rt.exitingElapsedSeconds = 0.0f;
+        rt.current->RequestExit(config_.transitionSeconds);
+    }
+    SyncCurrentEffectFromTimeline(rt, layer == LayerKind::Foreground ? config_.foreground : config_.background);
+}
+
+EffectEngine::LayerStatus EffectEngine::Status(LayerKind layer) const {
+    const LayerRuntime& rt = layer == LayerKind::Foreground ? fg_ : bg_;
+    LayerStatus status;
+    status.state = rt.sm->Current();
+    status.envelope = rt.sm->Envelope();
+    status.effectElapsedSeconds = rt.effectElapsedSeconds;
+    if (rt.current) {
+        status.hasEffect = true;
+        status.effect = rt.current->Id();
+    }
+    return status;
 }
 
 void EffectEngine::SyncCurrentEffectFromTimeline(LayerRuntime& rt, const LayerEffectConfig& layerConfig) {

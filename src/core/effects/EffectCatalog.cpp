@@ -1,5 +1,7 @@
 #include "EffectCatalog.h"
 
+#include <algorithm>
+
 namespace core::fx {
 
 const std::vector<EffectId>& ForegroundContinuousCatalog() {
@@ -37,6 +39,14 @@ const std::vector<EffectId>& CatalogFor(LayerKind layer, EffectKind kind) {
         return kind == EffectKind::Continuous ? ForegroundContinuousCatalog() : ForegroundTerminalCatalog();
     }
     return kind == EffectKind::Continuous ? BackgroundContinuousCatalog() : BackgroundTerminalCatalog();
+}
+
+std::optional<EffectKind> EffectKindOn(LayerKind layer, EffectId id) {
+    for (EffectKind kind : {EffectKind::Continuous, EffectKind::Terminal}) {
+        const auto& catalog = CatalogFor(layer, kind);
+        if (std::find(catalog.begin(), catalog.end(), id) != catalog.end()) return kind;
+    }
+    return std::nullopt;
 }
 
 } // namespace core::fx

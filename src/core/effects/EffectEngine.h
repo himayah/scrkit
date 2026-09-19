@@ -57,6 +57,29 @@ public:
 
     const FrameDrawList& DrawList() const { return drawList_; }
 
+    // ---- External control (docs/DESIGN_VIEWER.md §B.2-B.3) -----------------
+    // Never called during a normal /s run; the SCRAPI preview path drives these.
+
+    // Live-editable configuration. Common per-effect params (enabled/intensity/
+    // weight/durations) are read fresh every frame or on the next pick, so edits
+    // through this reference take effect without further notice. Directives must
+    // go through SetDirective instead so the layer is interrupted.
+    EngineConfig& MutableConfig() { return config_; }
+    const EngineConfig& Config() const { return config_; }
+
+    // Applies `directive` to `layer` and interrupts whatever that layer is doing
+    // so it takes effect (a running continuous effect eases out first).
+    void SetDirective(LayerKind layer, const LayerDirective& directive);
+
+    struct LayerStatus {
+        bool hasEffect = false;
+        EffectId effect = EffectId::FlagWave; // valid only when hasEffect
+        FxState state = FxState::Idle;
+        float effectElapsedSeconds = 0.0f;
+        float envelope = 0.0f;
+    };
+    LayerStatus Status(LayerKind layer) const;
+
 private:
     struct LayerRuntime {
         EffectStateMachine* sm = nullptr;

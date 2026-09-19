@@ -24,6 +24,9 @@ enum class FxState { Idle, Rest, Entering, Running, Exiting, TerminalRunning, Te
 
 enum class NoCandidatePolicy { ImmediateTerminal, WaitForTerminalRequest };
 
+// Stable lower-camel names for status readouts / logging.
+const char* FxStateToString(FxState state);
+
 struct FxInputs {
     float dt = 0.0f;
     bool currentFinished = false; // Terminal only: current IEffect::IsFinished()
@@ -66,6 +69,14 @@ public:
     void ForceIdle();
     void ForceRest();
 
+    // External-control hook (LayerDirective changed): drops out of whatever the
+    // layer is doing so the new directive takes effect. A running/entering
+    // continuous effect eases out through its normal exit (the caller must call
+    // the current IEffect's RequestExit if Current() became Exiting); an already
+    // Exiting layer simply consults the new directive when the exit finishes;
+    // any other state restarts the layer via Reset().
+    void Interrupt();
+
     FxOutputs Step(const FxInputs& in);
 
     FxState Current() const { return state_; }
@@ -76,6 +87,8 @@ private:
     void EnterTerminalRunning();
     void AdvanceAfterExiting(FxOutputs& out);
     EffectId DefaultTerminalId() const;
+    LayerDirective Directive() const { return ActiveDirectiveFor(*engine_, layer_); }
+    bool PinnedIsTerminal() const;
 
     LayerKind layer_;
     NoCandidatePolicy policy_;

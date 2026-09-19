@@ -1,5 +1,6 @@
 #include "EffectStateMachine.h"
 
+#include "EffectCatalog.h"
 #include "Envelope.h"
 
 namespace core::fx {
@@ -7,6 +8,45 @@ namespace core::fx {
 EffectStateMachine::EffectStateMachine(LayerKind layer, NoCandidatePolicy policy, const EngineConfig& engine,
                                         core::IRandomSource& rng, Timeline& timeline)
     : layer_(layer), policy_(policy), engine_(&engine), rng_(&rng), timeline_(&timeline) {}
+
+const char* FxStateToString(FxState state) {
+    switch (state) {
+        case FxState::Idle: return "idle";
+        case FxState::Rest: return "rest";
+        case FxState::Entering: return "entering";
+        case FxState::Running: return "running";
+        case FxState::Exiting: return "exiting";
+        case FxState::TerminalRunning: return "terminalRunning";
+        case FxState::TerminalDraining: return "terminalDraining";
+        case FxState::Consumed: return "consumed";
+        case FxState::Empty: return "empty";
+    }
+    return "unknown";
+}
+
+bool EffectStateMachine::PinnedIsTerminal() const {
+    const LayerDirective d = Directive();
+    if (d.mode != LayerMode::Pin) return false;
+    const auto kind = EffectKindOn(layer_, d.pinned);
+    return kind && *kind == EffectKind::Terminal;
+}
+
+void EffectStateMachine::Interrupt() {
+    terminalRequestedFlag_ = false;
+    showcaseElapsedSeconds_ = 0.0f;
+    switch (state_) {
+        case FxState::Entering:
+        case FxState::Running:
+            state_ = FxState::Exiting;
+            elapsedInState_ = 0.0f;
+            break;
+        case FxState::Exiting:
+            break;
+        default:
+            Reset(emptyReason_);
+            break;
+    }
+}
 
 EffectId EffectStateMachine::DefaultTerminalId() const {
     return layer_ == LayerKind::Foreground ? EffectId::VortexSuction : EffectId::BackgroundSuction;
@@ -42,6 +82,17 @@ void EffectStateMachine::Reset(EmptyReason reason) {
 
     if (reason != EmptyReason::NotEmpty) {
         state_ = FxState::Empty;
+        return;
+    }
+
+    const LayerDirective directive = Directive();
+    if (directive.mode == LayerMode::Rest) {
+        state_ = FxState::Rest;
+        envelope_ = 0.0f;
+        return;
+    }
+    if (PinnedIsTerminal()) {
+        EnterTerminalRunning(); // regardless of policy: a pinned terminal must start even on the background layer
         return;
     }
 
@@ -84,6 +135,12 @@ void EffectStateMachine::ForceRest() {
 }
 
 void EffectStateMachine::AdvanceAfterExiting(FxOutputs& out) {
+    if (Directive().mode == LayerMode::Rest) {
+        state_ = FxState::Rest;
+        elapsedInState_ = 0.0f;
+        envelope_ = 0.0f;
+        return;
+    }
     if (!terminalRequestedFlag_) {
         auto pick = EffectScheduler::Pick(EffectKind::Continuous, layer_, *engine_, timeline_->History(), *rng_,
                                            hueShiftReadyCache_);
@@ -111,7 +168,8 @@ FxOutputs EffectStateMachine::Step(const FxInputs& in) {
     if (layer_ == LayerKind::Foreground &&
         (state_ == FxState::Entering || state_ == FxState::Running || state_ == FxState::Exiting)) {
         showcaseElapsedSeconds_ += in.dt;
-        if (!terminalRequestedFlag_ && showcaseElapsedSeconds_ >= engine_->foregroundShowcaseSeconds) {
+        if (!terminalRequestedFlag_ && Directive().mode == LayerMode::Auto &&
+            showcaseElapsedSeconds_ >= engine_->foregroundShowcaseSeconds) {
             terminalRequestedFlag_ = true;
             if (state_ != FxState::Exiting) {
                 state_ = FxState::Exiting;

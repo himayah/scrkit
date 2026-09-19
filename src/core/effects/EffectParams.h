@@ -211,6 +211,23 @@ struct LayerEffectConfig {
     float defaultMaxSeconds = 10.0f;
 };
 
+// Per-layer override of the normal random cycling, used by external control
+// (docs/SCRAPI_SPEC.md / docs/DESIGN_VIEWER.md §B.2). The default (Auto) is the
+// saver's ordinary behavior; nothing in a normal /s run ever sets anything else.
+//   Auto: pick from the layer's candidate pool as usual.
+//   Rest: apply no effect -- the layer stays at its static rest pose.
+//   Pin:  play exactly `pinned` (continuous or terminal), re-starting it with a
+//         fresh seed each time it ends. A terminal effect that finishes is
+//         re-run when `loopTerminal` is set, otherwise the layer falls back to Rest.
+// Ignored entirely while EngineConfig::enabled is false (the v1-reproduction path).
+enum class LayerMode { Auto, Rest, Pin };
+
+struct LayerDirective {
+    LayerMode mode = LayerMode::Auto;
+    EffectId pinned = EffectId::FlagWave; // meaningful only for mode == Pin
+    bool loopTerminal = true;
+};
+
 struct EngineConfig {
     bool enabled = true;
     float transitionSeconds = 0.5f;
@@ -220,7 +237,16 @@ struct EngineConfig {
     LayerEffectConfig background;
     std::vector<EffectId> scriptedForeground;
     std::vector<EffectId> scriptedBackground;
+    LayerDirective foregroundDirective;
+    LayerDirective backgroundDirective;
 };
+
+// The directive that actually applies to `layer`: always Auto while the effect
+// system is disabled, so the v1-reproduction path can never be affected.
+inline LayerDirective ActiveDirectiveFor(const EngineConfig& config, LayerKind layer) {
+    if (!config.enabled) return LayerDirective{};
+    return layer == LayerKind::Foreground ? config.foregroundDirective : config.backgroundDirective;
+}
 
 // Builds a LayerEffectConfig with every catalog effect present (enabled,
 // default params) and the given layer default durations -- used both as the
