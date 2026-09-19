@@ -59,7 +59,11 @@ private:
     void CreateRow(const scrapi::ControlNode& node, int depth);
     void UpdateWidget(Row& row);
     void ApplyVisibility();
-    void Relayout();
+    // fullRedraw=false is for scrolling: children are moved in one batch with their pixels
+    // copied along, and nothing is invalidated wholesale (a per-step erase+repaint starves
+    // WM_PAINT during a drag and leaves the panel blank). fullRedraw=true (resize, rows
+    // shown/hidden, rebuild) repaints everything so no ghost of the old layout survives.
+    void Relayout(bool fullRedraw = true);
     void UpdateScrollBar();
     void OnCommand(int controlId, int notification, HWND source);
     void OnSlider(HWND slider, bool final);

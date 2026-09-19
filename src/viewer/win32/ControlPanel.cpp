@@ -144,7 +144,7 @@ bool ControlPanel::Create(HWND parent, HINSTANCE instance) {
 }
 
 HWND ControlPanel::MakeChild(const wchar_t* cls, const std::wstring& text, DWORD style, int id, DWORD exStyle) {
-    HWND h = CreateWindowExW(exStyle, cls, text.c_str(), style | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 10, 10, hwnd_,
+    HWND h = CreateWindowExW(exStyle, cls, text.c_str(), style | WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, hwnd_,
                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_, nullptr);
     if (h) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     return h;
@@ -376,7 +376,7 @@ void ControlPanel::ApplyVisibility() {
     Relayout();
 }
 
-void ControlPanel::Relayout() {
+void ControlPanel::Relayout(bool fullRedraw) {
     if (!hwnd_) return;
     for (int pass = 0; pass < 2; ++pass) {
         RECT client{};
@@ -385,9 +385,20 @@ void ControlPanel::Relayout() {
         const int pageHeight = std::max<int>(1, client.bottom - client.top);
 
         int y = kMargin - scrollPos_;
-        auto place = [](HWND h, int x, int yy, int w, int hgt) {
-            // NOCOPYBITS: after a scroll/resize, don't carry the old pixels along to the new spot.
-            if (h) SetWindowPos(h, nullptr, x, yy, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+        // One atomic batch move. When repainting everything anyway, don't copy stale bits.
+        HDWP batch = BeginDeferWindowPos(static_cast<int>(rows_.size()) * 4 + 16);
+        const UINT moveFlags = SWP_NOZORDER | SWP_NOACTIVATE | (fullRedraw ? SWP_NOCOPYBITS : 0);
+        auto place = [&](HWND h, int x, int yy, int w, int hgt) {
+            if (!h) return;
+            if (batch) {
+                HDWP next = DeferWindowPos(batch, h, nullptr, x, yy, w, hgt, moveFlags);
+                if (next) {
+                    batch = next;
+                    return;
+                }
+                batch = nullptr; // the batch is unusable now; fall back to individual moves
+            }
+            SetWindowPos(h, nullptr, x, yy, w, hgt, moveFlags);
         };
         for (Row& row : rows_) {
             if (!row.visible) continue;
@@ -426,6 +437,7 @@ void ControlPanel::Relayout() {
             }
             y += row.height + kRowGap;
         }
+        if (batch) EndDeferWindowPos(batch);
         contentHeight_ = y + scrollPos_ + kMargin;
         const int maxScroll = std::max(0, contentHeight_ - pageHeight);
         if (scrollPos_ > maxScroll) {
@@ -442,9 +454,11 @@ void ControlPanel::Relayout() {
         SetScrollInfo(hwnd_, SB_VERT, &si, TRUE);
         break;
     }
-    // Controls moved (scroll position reset, window resized, rows shown/hidden): repaint the
-    // panel and every child from scratch so no ghost of an earlier layout is left behind.
-    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    if (fullRedraw) {
+        // Window resized / rows shown or hidden / rebuilt: repaint the panel and every child
+        // from scratch so no ghost of an earlier layout is left behind.
+        RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    }
 }
 
 void ControlPanel::SendSet(const std::string& id, JsonValue value) {
@@ -604,7 +618,7 @@ LRESULT ControlPanel::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
                 default: break;
             }
             scrollPos_ = std::clamp(pos, 0, std::max(0, contentHeight_ - page));
-            Relayout();
+            Relayout(/*fullRedraw=*/false);
             return 0;
         }
         case WM_MOUSEWHEEL: {
@@ -613,7 +627,7 @@ LRESULT ControlPanel::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
             const int page = client.bottom - client.top;
             const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
             scrollPos_ = std::clamp(scrollPos_ - delta / WHEEL_DELTA * 48, 0, std::max(0, contentHeight_ - page));
-            Relayout();
+            Relayout(/*fullRedraw=*/false);
             return 0;
         }
         case WM_HSCROLL:
