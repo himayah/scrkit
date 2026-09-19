@@ -10,13 +10,26 @@ namespace {
 constexpr int kMaxLinesPerFrame = 64; // bounds the work a chatty viewer can cost one frame
 }
 
+namespace {
+// What the spiral controls beyond the effect engine do inside the app.
+core::SpiralHostHooks HooksFor(AppController& app) {
+    core::SpiralHostHooks h;
+    h.setContentSource = [&app](const std::string& source) { app.ApplyContentSource(source); };
+    h.setMaskOverlay = [&app](bool on) { app.SetMaskOverlay(on); };
+    h.restart = [&app](uint32_t seed) { app.Restart(seed); };
+    h.contentInfo = [&app] { return app.ContentInfo(); };
+    return h;
+}
+} // namespace
+
 ScrApiHost::ScrApiHost(AppController& app, const core::ConfigModel& config, HWND viewport,
                        const std::wstring& pipeName)
-    : binder_(*app.Engine(), clock_) {
+    : binder_(*app.Engine(), clock_, HooksFor(app)) {
     server_ = std::make_unique<scrapi::ServerCore>(
         core::BuildSpiralManifest(config.effects, core::kAppVersion), binder_.Hooks(),
         [this](const std::string& line) { pipe_.SendLine(line); });
     binder_.Attach(*server_);
+    binder_.ApplyInitialState(); // e.g. build the sample desktop for the foreground
     server_->SetViewportHandle(static_cast<int64_t>(reinterpret_cast<intptr_t>(viewport)));
     pipe_.Start(pipeName);
 }

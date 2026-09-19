@@ -67,6 +67,17 @@ void DrawFullscreenBlackOverlay(int screenWidthPx, int screenHeightPx, float alp
     glEnd();
 }
 
+void DrawColoredRect(float x, float y, float w, float h, float r, float g, float b, float a) {
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(r, g, b, a);
+    glBegin(GL_QUADS);
+    glVertex2f(x, y);
+    glVertex2f(x + w, y);
+    glVertex2f(x + w, y + h);
+    glVertex2f(x, y + h);
+    glEnd();
+}
+
 void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfWidthPx,
                            float halfHeightPx) {
     if (particles.empty() || texture == 0) return;

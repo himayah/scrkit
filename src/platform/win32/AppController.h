@@ -65,6 +65,16 @@ public:
     // an effect pinned for inspection isn't interrupted. Default true (normal saver).
     void SetAutoCycle(bool enabled) { autoCycle_ = enabled; }
 
+    // SCRAPI preview only. "sample": the foreground shows a built-in desktop (two windows, icons,
+    // a taskbar) run through the real mask pipeline; anything else: an empty foreground.
+    void ApplyContentSource(const std::string& source);
+    // Tints the cells detected as content and outlines the window rectangles.
+    void SetMaskOverlay(bool on) { maskOverlay_ = on; }
+    // Reseeds the random source and starts the show over (both layers, from the beginning).
+    void Restart(uint32_t seed);
+    // One-line description of what the foreground currently contains.
+    const std::string& ContentInfo() const { return contentInfo_; }
+
     void Shutdown();
 
 private:
@@ -118,6 +128,18 @@ private:
     float blackoutTimer_ = 0.0f;
     float blackoutTargetSeconds_ = 0.0f;
     bool autoCycle_ = true;
+
+    // Kept so the foreground can be rebuilt later (SCRAPI preview): the wallpaper as composited to
+    // the screen size, and what the mask overlay draws.
+    std::vector<uint8_t> wallpaperRgba_;
+    bool maskOverlay_ = false;
+    struct OverlayRect {
+        float x, y, w, h;
+    };
+    std::vector<OverlayRect> overlayCells_;
+    std::vector<OverlayRect> overlayWindows_;
+    std::string contentInfo_ = "none";
+    bool previewMode_ = false;
     // Basis for blackoutTargetSeconds_'s random draw: roughly 10x a single
     // effect's typical duration (the midpoint of fg/bg's own
     // defaultMinSeconds/defaultMaxSeconds, averaged across both layers),
@@ -125,6 +147,12 @@ private:
     // entry then draws uniformly from [0.7, 1.3] x this, so the interval
     // itself is never a fixed number (要望どおり).
     float blackoutBaseSeconds_ = 75.0f;
+
+    // Rebuilds the foreground layer from `capture` (null = empty): mask, texture, cells, and hands
+    // the new layer to the engine. `candidateRects` are window rectangles for the mask pipeline.
+    void SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects);
+    core::fx::LayerSource MakeForegroundSource(const std::vector<int>& cellIndices, bool hasContent) const;
+    void DrawMaskOverlay() const;
 
     void PickNewBlackoutTarget();
     void OnStateEntered(core::SaverState newState);

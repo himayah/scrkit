@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "../../core/ContentMask.h"
+#include "../../core/SampleDesktop.h"
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
@@ -172,34 +173,22 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         maskConfig.screenHeight = screenHeight_;
         maskConfig.gridN = gridN_;
 
-        // Real window/taskbar rectangles from the OS: a window is an opaque
-        // rectangle, so its interior must never be transparent, but where
-        // its body happens to match the wallpaper behind it (a white dialog
-        // over a white patch of wallpaper) the pixel diff has no evidence at
-        // all and no amount of mask-shape inference can recover the outline
-        // when the hole is open to the outside. Only rectangles the raw
-        // pixel diff already corroborates are used (core::SelectEvidencedRects),
-        // so a transparent overlay or invisible helper window can't turn
-        // plain wallpaper into content. Runs on the raw mask, before any
-        // hole filling inflates the evidence.
-        const std::vector<core::PixelRect> windowRects = core::SelectEvidencedRects(
-            attempt.mask, EnumerateVisibleWindowRects(screenWidth_, screenHeight_), maskConfig);
-        core::ForceRectsIntoMask(attempt.mask, windowRects, maskConfig);
-        core::Logger::Info("AppController: " + std::to_string(windowRects.size()) +
+        // The mask's post-processing chain (window rectangles from the OS as corroborating
+        // geometry, hole filling, sub-cell boundary refinement, ...): core::FinishContentMask.
+        // Runs on the raw mask, before any hole filling inflates the evidence.
+        std::vector<core::PixelRect> usedRects;
+        boundaryRefinement = core::FinishContentMask(desktopCapture->rgba.data(), attempt.compositedWallpaper.rgba.data(),
+                                                       attempt.mask, attempt.differingFraction,
+                                                       EnumerateVisibleWindowRects(screenWidth_, screenHeight_), maskConfig,
+                                                       &usedRects);
+        core::Logger::Info("AppController: " + std::to_string(usedRects.size()) +
                             " window rectangle(s) applied to the content mask");
-
-        core::FillEnclosedMaskHoles(attempt.mask, gridN_);
-        core::FillMajorityNeighborCells(attempt.mask, gridN_);
-
-        boundaryRefinement = core::RefineBoundaryMask(desktopCapture->rgba.data(),
-                                                        attempt.compositedWallpaper.rgba.data(), attempt.mask,
-                                                        maskConfig, windowRects);
-
-        core::FillBoundaryStraddlingCells(attempt.mask, attempt.differingFraction, gridN_);
     }
 
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
     const std::vector<bool>& mask = attempt.mask;
+    wallpaperRgba_ = compositedWallpaper.rgba; // kept for rebuilding the foreground later (SCRAPI preview)
+    previewMode_ = isPreviewMode;
 
     backgroundTexture_ = CreateTextureFromImage(compositedWallpaper);
     if (backgroundTexture_ == 0) {
@@ -277,18 +266,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     // 5. Effect engine (DESIGN_EFFECTS.md §2, §16 Step 8): built after rng_
     //    since it shares that same RNG for scheduling (D-11 -- distinct from
     //    each individual effect's own private per-instance RNG).
-    core::fx::LayerSource foregroundLayer;
-    foregroundLayer.kind = core::fx::LayerKind::Foreground;
-    foregroundLayer.texture = core::fx::TextureRole::Foreground;
-    foregroundLayer.screenW = static_cast<float>(screenWidth_);
-    foregroundLayer.screenH = static_cast<float>(screenHeight_);
-    foregroundLayer.gridN = gridN_;
-    foregroundLayer.cellIndices = contentCellIndices;
-    foregroundLayer.cells = contentParticles_;
-    foregroundLayer.cellHalfW = particleHalfWidthPx_;
-    foregroundLayer.cellHalfH = particleHalfHeightPx_;
-    foregroundLayer.empty = !hasForegroundContent;
-    foregroundLayer.emptyReason = foregroundEmptyReason_;
+    core::fx::LayerSource foregroundLayer = MakeForegroundSource(contentCellIndices, hasForegroundContent);
 
     core::fx::LayerSource backgroundLayer;
     backgroundLayer.kind = core::fx::LayerKind::Background;
@@ -321,6 +299,107 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     core::Logger::Info("AppController: initialized (" + std::to_string(resolvedParticleCount_) +
                         " particles, " + std::to_string(contentParticles_.size()) + " content cell(s))");
     return true;
+}
+
+core::fx::LayerSource AppController::MakeForegroundSource(const std::vector<int>& cellIndices, bool hasContent) const {
+    core::fx::LayerSource layer;
+    layer.kind = core::fx::LayerKind::Foreground;
+    layer.texture = core::fx::TextureRole::Foreground;
+    layer.screenW = static_cast<float>(screenWidth_);
+    layer.screenH = static_cast<float>(screenHeight_);
+    layer.gridN = gridN_;
+    layer.cellIndices = cellIndices;
+    layer.cells = contentParticles_;
+    layer.cellHalfW = particleHalfWidthPx_;
+    layer.cellHalfH = particleHalfHeightPx_;
+    layer.empty = !hasContent;
+    layer.emptyReason = foregroundEmptyReason_;
+    return layer;
+}
+
+void AppController::SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects) {
+    if (!effectEngine_) return;
+    if (foregroundTexture_ != 0) {
+        glDeleteTextures(1, &foregroundTexture_);
+        foregroundTexture_ = 0;
+    }
+    contentParticles_.clear();
+    overlayCells_.clear();
+    overlayWindows_.clear();
+    std::vector<int> cellIndices;
+    bool hasContent = false;
+
+    if (capture && capture->width == screenWidth_ && capture->height == screenHeight_ && wallpaperRgba_.size() == capture->rgba.size()) {
+        core::ContentMaskConfig cfg;
+        cfg.screenWidth = screenWidth_;
+        cfg.screenHeight = screenHeight_;
+        cfg.gridN = gridN_;
+        std::vector<float> differing;
+        std::vector<bool> mask = core::ComputeContentMask(capture->rgba.data(), wallpaperRgba_.data(), cfg, &differing);
+        std::vector<core::PixelRect> used;
+        core::BoundaryRefinement refinement =
+            core::FinishContentMask(capture->rgba.data(), wallpaperRgba_.data(), mask, differing, candidateRects, cfg, &used);
+
+        for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
+            if (!mask[i]) continue;
+            contentParticles_.push_back(particles_[i]);
+            cellIndices.push_back(static_cast<int>(i));
+            const int row = static_cast<int>(i) / gridN_, col = static_cast<int>(i) % gridN_;
+            const int x0 = (col * screenWidth_) / gridN_, x1 = ((col + 1) * screenWidth_) / gridN_;
+            const int y0 = (row * screenHeight_) / gridN_, y1 = ((row + 1) * screenHeight_) / gridN_;
+            overlayCells_.push_back({static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(x1 - x0), static_cast<float>(y1 - y0)});
+        }
+        for (const core::PixelRect& r : used) {
+            overlayWindows_.push_back({static_cast<float>(r.left), static_cast<float>(r.top), static_cast<float>(r.right - r.left),
+                                       static_cast<float>(r.bottom - r.top)});
+        }
+        foregroundTexture_ = CreateMaskedTextureFromImage(*capture, mask, gridN_, &refinement);
+        hasContent = foregroundTexture_ != 0 && !contentParticles_.empty();
+        contentInfo_ = std::to_string(contentParticles_.size()) + " cells, " + std::to_string(used.size()) + " window rect(s)";
+    } else {
+        contentInfo_ = "none";
+    }
+
+    foregroundEmptyReason_ = hasContent ? core::fx::EmptyReason::NotEmpty
+                                        : (previewMode_ ? core::fx::EmptyReason::PreviewMode : core::fx::EmptyReason::CaptureFailed);
+    effectEngine_->SetForegroundLayer(MakeForegroundSource(cellIndices, hasContent));
+    core::Logger::Info("AppController: foreground content rebuilt (" + contentInfo_ + ")");
+}
+
+void AppController::ApplyContentSource(const std::string& source) {
+    if (source == "sample" && !wallpaperRgba_.empty()) {
+        core::SampleDesktop sample = core::MakeSampleDesktop(wallpaperRgba_.data(), screenWidth_, screenHeight_);
+        DecodedImage capture;
+        capture.width = screenWidth_;
+        capture.height = screenHeight_;
+        capture.rgba = std::move(sample.rgba);
+        SetForegroundContent(&capture, sample.windows);
+    } else {
+        SetForegroundContent(nullptr, {});
+    }
+}
+
+void AppController::Restart(uint32_t seed) {
+    if (!rng_ || !effectEngine_) return;
+    rng_->Seed(seed); // in place: the engine holds a pointer to this very object
+    core::WalkerBounds bounds{0.0f, 0.0f, static_cast<float>(screenWidth_), static_cast<float>(screenHeight_)};
+    center_ = std::make_unique<core::SuctionCenterWalker>(core::Vec2{screenWidth_ * 0.5f, screenHeight_ * 0.5f}, bounds, 2.0f);
+    stateMachine_ = core::SaverStateMachine(core::SaverState::STATE_CONTENT);
+    blackHoldTimer_ = resetHoldTimer_ = 0.0f;
+    fade_.Reset();
+    fadeOut_.Reset();
+    OnStateEntered(core::SaverState::STATE_CONTENT);
+}
+
+void AppController::DrawMaskOverlay() const {
+    for (const OverlayRect& c : overlayCells_) DrawColoredRect(c.x, c.y, c.w, c.h, 0.15f, 0.85f, 0.3f, 0.28f);
+    constexpr float t = 3.0f; // outline thickness
+    for (const OverlayRect& w : overlayWindows_) {
+        DrawColoredRect(w.x, w.y, w.w, t, 0.1f, 0.5f, 1.0f, 0.95f);
+        DrawColoredRect(w.x, w.y + w.h - t, w.w, t, 0.1f, 0.5f, 1.0f, 0.95f);
+        DrawColoredRect(w.x, w.y, t, w.h, 0.1f, 0.5f, 1.0f, 0.95f);
+        DrawColoredRect(w.x + w.w - t, w.y, t, w.h, 0.1f, 0.5f, 1.0f, 0.95f);
+    }
 }
 
 void AppController::Shutdown() {
@@ -447,6 +526,7 @@ void AppController::Draw() const {
         case core::SaverState::STATE_RESET:
             ClearBlack();
             if (effectEngine_) ExecuteDrawList(effectEngine_->DrawList(), BuildTextureTable());
+            if (maskOverlay_) DrawMaskOverlay();
             break;
         case core::SaverState::STATE_FADEOUT:
             // Both layers keep animating normally underneath; only the black
