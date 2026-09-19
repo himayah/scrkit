@@ -230,6 +230,42 @@ TEST_CASE(ContentMask_MedianGainIgnoresLargeContentOutlier) {
     CHECK(mask[0 * gridN + 0]);
 }
 
+TEST_CASE(ContentMask_GainExcludeRectsRecoverBackgroundOnAMostlyWindowedDesktop) {
+    // Real-machine case (2026-09-20): several large windows covered ~90% of the screen, so
+    // background pixels -- ContentMask_MedianGainIgnoresLargeContentOutlier's 60% "majority" --
+    // were actually the minority. The plain median gain then landed on the *window's* ratio and,
+    // applied to the whole wallpaper reference, flooded the genuinely-matching background too
+    // (measured on that capture: 17% -> 57% of true-background pixels reading as "different"
+    // before any per-cell decision even ran). Passing the OS-reported window rectangle as
+    // `gainExcludeRects` removes its pixels from the ratio sample, restoring the
+    // majority-is-background assumption the gain relies on.
+    // Wide enough that the background strip (10% of the width) still has cells safely outside the
+    // reach of even ChooseBlurRadius's largest (radius-12) box blur, which the gain contamination
+    // below would otherwise also push to its maximum trying (futilely) to explain away the mismatch.
+    const int width = 400, height = 100, gridN = 40; // 10x10px cells
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+    auto capture = SolidBuffer(width, height, 100, 100, 100);
+    FillRect(capture, width, 0, 0, 360, height, 200, 200, 200); // 90% brighter "window", cols 0-359
+    const PixelRect windowRect{0, 0, 360, height};
+    const int bgCol = 39; // rightmost cell (px 390-399), 30px clear of the window boundary at x=360
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+
+    // Without exclusion: the 90%-majority window drags the median gain to ~2.0x, which then
+    // misreads the untouched background strip as content too.
+    auto floodedMask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(floodedMask[5 * gridN + bgCol]);
+
+    // With the window excluded from the gain sample, the background strip reads correctly again.
+    auto fixedMask = ComputeContentMask(capture.data(), wallpaper.data(), config, nullptr, nullptr, {windowRect});
+    CHECK(!fixedMask[5 * gridN + bgCol]);
+    // The window itself is still flagged either way.
+    CHECK(fixedMask[5 * gridN + 0]);
+}
+
 TEST_CASE(ContentMask_BoxBlurSuppressesPeriodicPixelNoise) {
     // Models the fine, high-frequency edge/anti-aliasing noise a detailed
     // photographic wallpaper shows once decoded and scaled by a different

@@ -34,7 +34,15 @@ void ResampleRgbaSmooth(const uint8_t* src, int srcW, int srcH, uint8_t* dst, in
 // How well a wallpaper reference resembles the capture *as a picture* (diagnostics): mean color of
 // each, and the correlation of their luminance over 16x16-pixel blocks. ~1.0 with equal means: the
 // same image, aligned. High correlation but different means: a brightness/tone difference. Low
-// correlation: a different image, fit mode, or position.
+// correlation: a different image, fit mode, or position -- BUT ONLY on a desktop that's mostly bare
+// wallpaper. This runs over the *whole* frame with no window-rectangle exclusion (unlike
+// ComputeContentMask's gain step, which does exclude them -- see its `gainExcludeRects`), so a
+// desktop where open windows cover most of the screen will read a low correlation and very different
+// means purely because most compared pixels are legitimately window vs. wallpaper, not because the
+// reference itself is wrong (real-machine case: 0.179 correlation on a desktop where 3 large windows
+// covered ~90% of the screen, while the true wallpaper areas matched to within a few percent).
+// Restrict the comparison to a window-free region, or read debug_capture.bmp/debug_reference.bmp
+// directly, before concluding the reference itself is the problem.
 struct ReferenceComparison {
     double meanCapture[3] = {0, 0, 0};
     double meanReference[3] = {0, 0, 0};
@@ -183,7 +191,12 @@ struct PixelRect {
 //    not better, since it "corrected" background pixels that never needed
 //    it based on a number contaminated by the window). The median stays
 //    representative of the actual background as long as background pixels
-//    remain the majority of the screen, which they normally are.
+//    remain the majority of the screen, which they normally are -- and when
+//    they aren't (several large windows covering most of a real desktop),
+//    `gainExcludeRects` below lets the caller supply the OS-reported window
+//    rectangles so those pixels never enter the ratio sample in the first
+//    place, restoring the majority-background assumption instead of
+//    quietly relying on it.
 // 2. Both `captureRgba` and the gain-corrected wallpaper are then run
 //    through the same small box blur before the pixel-by-pixel diff. An
 //    independently decoded and resized wallpaper can never reproduce the
@@ -224,10 +237,18 @@ struct PixelRect {
 // matches the capture, wider when it doesn't match at fine scale (a finely textured wallpaper the
 // reference reproduces only approximately), so that mismatch isn't reported as content. Reported
 // through `outBlurRadius` when non-null.
+//
+// `gainExcludeRects` (typically the OS-reported window rectangles, before any pixel-evidence
+// vetting): pixels inside them never contribute to the brightness-gain sample (see
+// ComputeRobustBrightnessGain's doc comment in ContentMask.cpp). Needed on a real desktop that's
+// mostly covered by open windows, where background pixels -- the gain's usual majority-vote
+// assumption -- are actually the minority; omitting it (the default) reproduces the original
+// whole-frame gain.
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config,
                                       std::vector<float>* outDifferingFraction = nullptr,
-                                      int* outBlurRadius = nullptr);
+                                      int* outBlurRadius = nullptr,
+                                      const std::vector<PixelRect>& gainExcludeRects = {});
 
 // The smallest blur radius (2, 3, 4, 6, 8 or 12) at which the quietest parts of the screen no longer
 // look different from the wallpaper reference: the 25th percentile, over a coarse tile grid, of the
@@ -236,7 +257,11 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
 // reference that differs at fine scale everywhere (~1px misalignment or different resampling on a
 // high-contrast texture) needs a wider blur first. Real content is clustered, so a desktop mostly
 // covered by windows still has quiet tiles and is not mistaken for a mismatch.
-int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, const ContentMaskConfig& config);
+//
+// `gainExcludeRects`: see ComputeContentMask -- forwarded to the internal gain computation so this
+// picks the same blur radius ComputeContentMask itself will use.
+int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, const ContentMaskConfig& config,
+                      const std::vector<PixelRect>& gainExcludeRects = {});
 
 // Returns true if `mask` flags at least `threshold` (default 90%) of its
 // cells as content -- a strong signal that `captureRgba` and `wallpaperRgba`
@@ -388,9 +413,15 @@ struct BoundaryRefinement {
 // notch into the window. Rectangles are ignored for cells that aren't
 // boundary cells (an interior cell is already fully `true` from
 // ForceRectsIntoMask).
+//
+// `gainExcludeRects`: see ComputeContentMask -- must be the same list the original ComputeContentMask
+// call for this capture/wallpaper pair used, so the gain this function recomputes internally matches
+// exactly (usually the raw, unvetted candidate rects -- not `forcedRects`, which have already been
+// through SelectEvidencedRects and may have dropped ones that are still worth excluding here).
 BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                        std::vector<bool>& mask, const ContentMaskConfig& config,
-                                       const std::vector<PixelRect>& forcedRects = {});
+                                       const std::vector<PixelRect>& forcedRects = {},
+                                       const std::vector<PixelRect>& gainExcludeRects = {});
 
 // Keeps only the rectangles in `rects` (real, OS-reported visible window/
 // taskbar bounds -- see platform::EnumerateVisibleWindowRects) that the pixel

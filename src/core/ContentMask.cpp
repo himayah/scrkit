@@ -25,6 +25,16 @@ constexpr float kMaxBrightnessGain = 4.0f;
 // a sensitive knob -- 5x5 is a reasonable middle ground.
 constexpr int kBoxBlurRadius = 2; // the smallest radius; ChooseBlurRadius may pick a wider one
 
+// True if pixel (x,y) falls inside any of `rects` (half-open). Local to the gain calculation below;
+// RegionCenterInAnyRect (defined further down) is deliberately not reused here since it tests a
+// region's center against doubled coordinates, one abstraction more than a single pixel needs.
+bool PixelInAnyRect(const std::vector<PixelRect>& rects, int x, int y) {
+    for (const PixelRect& r : rects) {
+        if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return true;
+    }
+    return false;
+}
+
 // Per-pixel luminance ratio (capture/wallpaper) at one pixel, used to
 // derive the brightness gain below via its *median* across the whole
 // image rather than a single ratio-of-sums -- real-machine feedback found
@@ -39,10 +49,32 @@ constexpr int kBoxBlurRadius = 2; // the smallest radius; ChooseBlurRadius may p
 // the majority of the screen, which they normally are; a real global
 // offset (e.g. HDR tone-mapping) still shows up in the median as usual
 // since it shifts the vast majority of those per-pixel ratios together.
-float ComputeRobustBrightnessGain(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, size_t pixelCount) {
+//
+// "Normally are" broke down on a real machine with several large windows
+// open at once (a terminal plus two browsers, covering ~90% of the
+// screen): background pixels were the *minority*, so the median itself
+// landed on a window pixel's ratio (1.28x measured), and applying that
+// gain to the wallpaper then flooded the genuinely-background remainder
+// too (measured: the fraction of true-background pixels reading as
+// "different" jumped from 17% to 57% purely from this bad gain, before any
+// per-cell decision even ran). `excludeRects` -- the OS-reported window
+// rectangles (platform::EnumerateVisibleWindowRects), known independently
+// of any pixel evidence -- lets the majority-background assumption hold in
+// exactly the case it would otherwise fail: a pixel inside a known window
+// rectangle never contributes to the ratio sample, so the median reflects
+// only pixels that plausibly *are* background, however small a share of
+// the screen that ends up being. Passing none (the default) reproduces the
+// original whole-frame behavior.
+float ComputeRobustBrightnessGain(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width,
+                                   size_t pixelCount, const std::vector<PixelRect>& excludeRects) {
     std::vector<float> ratios;
     ratios.reserve(pixelCount);
     for (size_t i = 0; i < pixelCount; ++i) {
+        if (!excludeRects.empty() && width > 0 &&
+            PixelInAnyRect(excludeRects, static_cast<int>(i % static_cast<size_t>(width)),
+                            static_cast<int>(i / static_cast<size_t>(width)))) {
+            continue;
+        }
         const uint8_t* c = captureRgba + i * 4;
         const uint8_t* w = wallpaperRgba + i * 4;
         const int wLum = w[0] + w[1] + w[2];
@@ -390,11 +422,13 @@ void ResampleRgbaSmooth(const uint8_t* src, int srcW, int srcH, uint8_t* dst, in
     }
 }
 
-int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, const ContentMaskConfig& config) {
+int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, const ContentMaskConfig& config,
+                      const std::vector<PixelRect>& gainExcludeRects) {
     const int width = config.screenWidth;
     const int height = config.screenHeight;
     if (width <= 0 || height <= 0) return kBoxBlurRadius;
-    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, static_cast<size_t>(width) * height);
+    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, width,
+                                                    static_cast<size_t>(width) * height, gainExcludeRects);
 
     // Sample points on a regular grid (clear of the borders, where clamping distorts the blur), grouped
     // into a coarse grid of tiles. Real content (windows, icons) is *concentrated* in some tiles and
@@ -432,7 +466,8 @@ int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, c
 
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config,
-                                      std::vector<float>* outDifferingFraction, int* outBlurRadius) {
+                                      std::vector<float>* outDifferingFraction, int* outBlurRadius,
+                                      const std::vector<PixelRect>& gainExcludeRects) {
     const int n = std::max(1, config.gridN);
     const int width = config.screenWidth;
     const int height = config.screenHeight;
@@ -441,7 +476,7 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
     if (width <= 0 || height <= 0) return mask;
 
     const size_t pixelCount = static_cast<size_t>(width) * height;
-    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, pixelCount);
+    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, width, pixelCount, gainExcludeRects);
 
     std::vector<uint8_t> gainedWallpaper(pixelCount * 4);
     for (size_t i = 0; i < pixelCount; ++i) {
@@ -467,7 +502,7 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
     // different) essentially untouched.
     std::vector<uint8_t> blurredCapture;
     std::vector<uint8_t> blurredWallpaper;
-    const int blurRadius = ChooseBlurRadius(captureRgba, wallpaperRgba, config);
+    const int blurRadius = ChooseBlurRadius(captureRgba, wallpaperRgba, config, gainExcludeRects);
     if (outBlurRadius) *outBlurRadius = blurRadius;
     BoxBlurRgb(captureRgba, width, height, blurRadius, blurredCapture);
     BoxBlurRgb(gainedWallpaper.data(), width, height, blurRadius, blurredWallpaper);
@@ -721,7 +756,8 @@ void ForceRectsIntoMask(std::vector<bool>& mask, const std::vector<PixelRect>& r
 
 BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                        std::vector<bool>& mask, const ContentMaskConfig& config,
-                                       const std::vector<PixelRect>& forcedRects) {
+                                       const std::vector<PixelRect>& forcedRects,
+                                       const std::vector<PixelRect>& gainExcludeRects) {
     BoundaryRefinement result;
     const int gridN = config.gridN;
     const int width = config.screenWidth;
@@ -732,8 +768,9 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
     }
 
     const size_t pixelCount = static_cast<size_t>(width) * height;
-    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, pixelCount);
-    const int blurRadius = ChooseBlurRadius(captureRgba, wallpaperRgba, config); // same choice as ComputeContentMask made
+    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, width, pixelCount, gainExcludeRects);
+    const int blurRadius =
+        ChooseBlurRadius(captureRgba, wallpaperRgba, config, gainExcludeRects); // same choice as ComputeContentMask made
     const int leafGrid = 1 << config.boundaryRefineMaxDepth;
     result.leafGrid = leafGrid;
 
@@ -802,7 +839,7 @@ BoundaryRefinement FinishContentMask(const uint8_t* captureRgba, const uint8_t* 
     local.afterEnclosed = count();
     FillMajorityNeighborCells(mask, config.gridN);
     local.afterMajority = count();
-    BoundaryRefinement refinement = RefineBoundaryMask(captureRgba, wallpaperRgba, mask, config, rects);
+    BoundaryRefinement refinement = RefineBoundaryMask(captureRgba, wallpaperRgba, mask, config, rects, candidateRects);
     local.afterRefine = count();
     FillBoundaryStraddlingCells(mask, differingFraction, config.gridN);
     local.afterStraddle = count();

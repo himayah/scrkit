@@ -96,6 +96,22 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     particleHalfWidthPx_ = cellWidth * 0.55f;
     particleHalfHeightPx_ = cellHeight * 0.55f;
 
+    // Real window rectangles from the OS, gathered once up front (a pure query against
+    // screenWidth_/screenHeight_, independent of the wallpaper/capture below) so both the initial
+    // brightness-gain estimate below and the later post-processing chain (core::FinishContentMask)
+    // agree on the exact same set -- see ComputeContentMask's `gainExcludeRects` doc comment for why
+    // the gain step needs these at all: on a desktop mostly covered by open windows, background
+    // pixels are the minority, and the median-ratio gain has no other way to tell them apart from
+    // window pixels before any mask decision has been made.
+    const std::vector<WindowInfo> windows =
+        haveMatchingCapture ? EnumerateVisibleWindows(screenWidth_, screenHeight_) : std::vector<WindowInfo>();
+    std::vector<core::PixelRect> candidateRects;
+    std::vector<std::string> windowLabels;
+    for (const WindowInfo& w : windows) {
+        candidateRects.push_back(w.rect);
+        windowLabels.push_back(RectLabel(w));
+    }
+
     // 1 (continued). Wallpaper image: decodes and composites the wallpaper
     // at `path` the same way Windows
     // actually positions/scales it (Fill/Fit/Stretch/Center/Tile), then (if
@@ -131,7 +147,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             maskConfig.gridN = gridN_;
             attempt.mask = core::ComputeContentMask(desktopCapture->rgba.data(),
                                                       attempt.compositedWallpaper.rgba.data(), maskConfig,
-                                                      &attempt.differingFraction);
+                                                      &attempt.differingFraction, nullptr, candidateRects);
         }
         return attempt;
     };
@@ -204,21 +220,17 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 
         // The mask's post-processing chain (window rectangles from the OS as corroborating
         // geometry, hole filling, sub-cell boundary refinement, ...): core::FinishContentMask.
-        // Runs on the raw mask, before any hole filling inflates the evidence.
-        const std::vector<WindowInfo> windows = EnumerateVisibleWindows(screenWidth_, screenHeight_);
-        std::vector<core::PixelRect> candidateRects;
-        std::vector<std::string> labels;
-        for (const WindowInfo& w : windows) {
-            candidateRects.push_back(w.rect);
-            labels.push_back(RectLabel(w));
-        }
+        // Runs on the raw mask, before any hole filling inflates the evidence. Reuses the same
+        // `candidateRects` gathered above (rather than re-enumerating) so this stage's internal
+        // gain recompute (RefineBoundaryMask) matches exactly what tryWallpaper's ComputeContentMask
+        // call already used.
         std::vector<core::PixelRect> usedRects;
         std::vector<bool> accepted;
         core::ContentMaskStats stats;
         boundaryRefinement = core::FinishContentMask(desktopCapture->rgba.data(), attempt.compositedWallpaper.rgba.data(),
                                                        attempt.mask, attempt.differingFraction, candidateRects, maskConfig,
                                                        &usedRects, &accepted, &stats);
-        LogMaskDiagnostics("screensaver", 0, stats, &labels, accepted);
+        LogMaskDiagnostics("screensaver", 0, stats, &windowLabels, accepted);
     }
 
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
@@ -377,7 +389,8 @@ void AppController::SetForegroundContent(const DecodedImage* capture, const std:
         cfg.gridN = gridN_;
         std::vector<float> differing;
         int blurRadius = 0;
-        std::vector<bool> mask = core::ComputeContentMask(capture->rgba.data(), wallpaperRgba_.data(), cfg, &differing, &blurRadius);
+        std::vector<bool> mask =
+            core::ComputeContentMask(capture->rgba.data(), wallpaperRgba_.data(), cfg, &differing, &blurRadius, candidateRects);
         std::vector<core::PixelRect> used;
         std::vector<bool> accepted;
         core::ContentMaskStats stats;
