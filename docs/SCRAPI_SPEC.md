@@ -1,6 +1,7 @@
 # SCRAPI v1 仕様 (Screensaver Control API) -- ドラフト
 
-> 状態: **設計ドラフト** (ブランチ `feature/scrapi-viewer`)。実装は未着手。
+> 状態: **ドラフト** (ブランチ `feature/scrapi-viewer`)。spiral-suction-saver 側とビュワーの初期実装あり
+> (実装状況は [`DESIGN_VIEWER.md`](DESIGN_VIEWER.md) §F)。実装で見つかった修正(`invoke` の対象は `control` 等)は反映済み。
 > 本書は **spiral-suction-saver に依存しない**汎用仕様であり、SCRAPI 対応の `.scr` と
 > 汎用ビュワー(`ScrViewer`、実装設計は [`DESIGN_VIEWER.md`](DESIGN_VIEWER.md))の間の契約だけを定義する。
 > spiral-suction-saver 固有のコントロール一覧は `DESIGN_VIEWER.md` 側にある。

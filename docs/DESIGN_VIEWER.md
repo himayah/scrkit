@@ -1,6 +1,6 @@
 # SCRAPI 対応 spiral-suction-saver 拡張と ScrViewer の設計 -- ドラフト
 
-> 状態: **設計ドラフト** (ブランチ `feature/scrapi-viewer`、実装未着手)。
+> 状態: **設計ドラフト + 初期実装** (ブランチ `feature/scrapi-viewer`)。実装の進み具合と設計からの変更点は §F。
 > 汎用 API 仕様は [`SCRAPI_SPEC.md`](SCRAPI_SPEC.md)。本書は (A) その仕様の採用方針、
 > (B) spiral-suction-saver 側の拡張、(C) ビュワー `ScrViewer`、(D) 検証計画・段階計画、
 > (E) 未決事項、をまとめる。本書は設計を固める段階のもので、現行仕様は [`DESIGN.md`](DESIGN.md)。
@@ -332,3 +332,30 @@ capability があるとき)。セーバーは論理解像度を保ち、ビュ�
 | E-4 | `.scr` 側のマニフェスト伝達 | 当面は実行時 `manifest` のみ。リソース埋め込みはフェーズ 5 | 最初からビルド時生成リソース |
 | E-5 | エフェクト固有パラメータの公開範囲 | フェーズ 4 で `EffectContext` 経路を追加して段階公開 | 共通 5 項目のみで止める |
 | E-6 | 名前 (`SCRAPI` / `ScrViewer`) | 仮称のまま進める | 変更 |
+
+## F. 実装状況と設計からの変更点 (随時更新)
+
+| フェーズ | 状況 |
+|---|---|
+| 0 スパイク | **S4 完了**(`tests/test_fx_Directive.cpp` の無作為切り替えテスト)。S2 の受け渡し設計は実装済み(実機の動作は未確認)。**S1 (別プロセス子ウィンドウでの GL 描画とリサイズ追従)・S3 (非対応 `.scr` の挙動) は実機確認待ち** |
+| 1 コア | **完了**。`src/scrapi/`(Json/Manifest/ControlModel/Protocol/ServerCore/ClientCore)、`SpiralControls`(マニフェスト生成・バインダ)、`LayerDirective`、`SimulationClock`。Linux 単体テスト 315 件通過 |
+| 2 セーバー側 | **実装済み・CI でコンパイル確認済み**。`/scrapi:<pipe>`、`ScrApiPipe`/`ScrApiHost`、プレビューの論理解像度化(レターボックス)、自動巡回の停止。**実機動作は未確認** |
+| 3 ビュワー骨格 | **実装済み・CI でコンパイル確認済み**。`src/viewer/win32/`(起動・パイプ・標準ウィジェット生成)。**実機動作は未確認** |
+| 4 コンテンツ源 ほか | **未着手**。現状 `/p` は画面キャプチャを行わないため上物層は空(§B.4)。`fg.*` コントロールは値としては効くが、上物が無いので見た目には出ない |
+| 5 仕上げ | **未着手**(ノブ、パレットのスウォッチ列、プリセット、マニフェストのリソース埋め込み、DPI 対応) |
+
+### 設計からの変更点
+
+- **`invoke` の対象は `control`**: 封筒の `id`(要求番号)と衝突するため(SPEC §4.2)。単体テストで発見。
+- **`set` の応答は id ごとの結果**(`results`)。一部が不正でも有効な分は適用される(SPEC §4.2)。
+- **制御 `bg.pool` / `fg.pool`(flags)を追加**: Auto モードが選べるエフェクトの集合。§B.6 の `fx.<Id>.enabled` の代わり。
+  `fx.<Id>.*` は Pin 時に意味のある `intensity`/`minSeconds`/`maxSeconds` のみ。
+- **`scrapi.restart` / `scrapi.seed` / `content.*` / `mask.*` / `phase.*` は未実装**(Phase 4)。
+- **ビュワーのファイル構成**: 設計の `HostWindow`/`SessionController`/`ControlFactory` は、`ViewerMain.cpp`(ウィンドウと
+  セッション)と `ControlPanel.cpp`(ウィジェット生成と同期)、`ScrLauncher.cpp`(プロセス起動)に集約した。
+- **パイプは共有実装**: `ScrApiPipe`(クライアント/サーバー両モード)を `.scr` とビュワーで共有。
+- **バージョン文字列**: `core::kAppVersion`(`src/core/Version.h`)。リリースはタグ駆動でコードを変えないため、
+  リリース時に更新するかは運用次第(現状は `2.1.0+scrapi-dev`)。
+- **既知の未対応**: ビュワーは DPI 非対応(拡大表示時はビットマップ拡大)。スライダの `log` スケール、`knob` 表示、
+  `folder` 型パス選択は標準スライダ/ファイル選択に劣化する。
+
