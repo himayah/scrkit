@@ -1,6 +1,7 @@
 #include "SaverWindow.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "AppPaths.h"
 #include "OpenGLContext.h"
 #include "Renderer.h"
+#include "ScrApiHost.h"
 #include "ScreenCapture.h"
 #include "StringConvert.h"
 #include "WallpaperProvider.h"
@@ -136,8 +138,25 @@ std::wstring ResolveWallpaperPath(const core::ConfigModel& config) {
 // been captured against exactly this same width x height (only meaningful
 // for the real fullscreen size -- callers never pass it for the scaled-down
 // preview).
+// Fits the logical `width` x `height` picture into the window's client area, keeping its
+// aspect ratio (letterboxed with the black the frame is cleared to). Used only for the
+// SCRAPI preview, where the viewer may give the window any size.
+void ApplyLetterboxedViewport(HWND hwnd, int logicalW, int logicalH, RECT& lastClient) {
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    if (client.right == lastClient.right && client.bottom == lastClient.bottom) return;
+    lastClient = client;
+    const int winW = std::max<int>(1, client.right - client.left);
+    const int winH = std::max<int>(1, client.bottom - client.top);
+    const double scale = std::min(static_cast<double>(winW) / logicalW, static_cast<double>(winH) / logicalH);
+    const int vpW = std::max(1, static_cast<int>(logicalW * scale));
+    const int vpH = std::max(1, static_cast<int>(logicalH * scale));
+    glViewport((winW - vpW) / 2, (winH - vpH) / 2, vpW, vpH);
+}
+
 void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
-                    const DecodedImage* desktopCapture = nullptr, bool isPreviewMode = false) {
+                    const DecodedImage* desktopCapture = nullptr, bool isPreviewMode = false,
+                    const std::wstring& scrapiPipeName = std::wstring()) {
     SetupOrthoProjection2D(width, height);
 
     // Show the just-captured real desktop immediately, before doing any of
@@ -169,6 +188,17 @@ void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
         return;
     }
 
+    // SCRAPI preview: hand the frame loop to the viewer's controls. The normal blackout cycle
+    // is held off so an effect pinned for inspection isn't interrupted; the phase machine
+    // simply stays in STATE_CONTENT.
+    std::unique_ptr<ScrApiHost> scrapiHost;
+    RECT lastClient{};
+    if (!scrapiPipeName.empty()) {
+        app.SetAutoCycle(false);
+        scrapiHost = std::make_unique<ScrApiHost>(app, config, hwnd, scrapiPipeName);
+        core::Logger::Info("SaverWindow: SCRAPI session requested by the viewer");
+    }
+
     LARGE_INTEGER freq{};
     LARGE_INTEGER prevTime{};
     QueryPerformanceFrequency(&freq);
@@ -197,8 +227,14 @@ void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
         prevTime = now;
         if (dt > 0.25) dt = 0.25; // clamp huge gaps (e.g. after being stalled)
 
-        app.Update(static_cast<float>(dt));
+        float simDt = static_cast<float>(dt);
+        if (scrapiHost) {
+            simDt = scrapiHost->BeginFrame(simDt);
+            ApplyLetterboxedViewport(hwnd, width, height, lastClient);
+        }
+        app.Update(simDt);
         app.Draw();
+        if (scrapiHost) scrapiHost->EndFrame();
         gl.SwapBuffers();
 
         LARGE_INTEGER afterRender{};
@@ -212,6 +248,7 @@ void RunMessageLoop(HWND hwnd, OpenGLContext& gl, int width, int height,
         }
     }
 
+    scrapiHost.reset(); // before the app it holds a reference into
     app.Shutdown();
 }
 
@@ -278,7 +315,7 @@ void RunFullScreenSaver(HINSTANCE instance) {
     }
 }
 
-void RunPreview(HINSTANCE instance, HWND previewParent) {
+void RunPreview(HINSTANCE instance, HWND previewParent, const std::wstring& scrapiPipeName) {
     if (!previewParent || !IsWindow(previewParent)) {
         return;
     }
@@ -302,9 +339,17 @@ void RunPreview(HINSTANCE instance, HWND previewParent) {
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&ctx));
     SetTimer(hwnd, kPreviewParentWatchTimerId, 250, nullptr);
 
+    // SCRAPI: render at a fixed logical resolution (the primary monitor's) regardless of
+    // the window size, so the viewer can resize the window freely without the effects'
+    // pixel-based math or the grid changing; the viewport scales the picture to fit.
+    const bool scrapi = !scrapiPipeName.empty();
+    const int logicalW = scrapi ? GetSystemMetrics(SM_CXSCREEN) : width;
+    const int logicalH = scrapi ? GetSystemMetrics(SM_CYSCREEN) : height;
+
     OpenGLContext gl;
     if (gl.Create(hwnd)) {
-        RunMessageLoop(hwnd, gl, width, height, /*desktopCapture=*/nullptr, /*isPreviewMode=*/true);
+        RunMessageLoop(hwnd, gl, logicalW, logicalH, /*desktopCapture=*/nullptr, /*isPreviewMode=*/true,
+                       scrapiPipeName);
         gl.Destroy();
     }
 

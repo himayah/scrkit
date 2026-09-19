@@ -58,6 +58,13 @@ public:
     void Update(float dtSeconds);
     void Draw() const;
 
+    // External-control access (SCRAPI preview, docs/DESIGN_VIEWER.md §B.3). Null before
+    // Initialize() succeeds.
+    core::fx::EffectEngine* Engine() { return effectEngine_.get(); }
+    // false: hold STATE_CONTENT indefinitely (the blackout/fade cycle never starts), so
+    // an effect pinned for inspection isn't interrupted. Default true (normal saver).
+    void SetAutoCycle(bool enabled) { autoCycle_ = enabled; }
+
     void Shutdown();
 
 private:
@@ -110,6 +117,7 @@ private:
     // design: the two layers' effect switches are meant to stay unsynced).
     float blackoutTimer_ = 0.0f;
     float blackoutTargetSeconds_ = 0.0f;
+    bool autoCycle_ = true;
     // Basis for blackoutTargetSeconds_'s random draw: roughly 10x a single
     // effect's typical duration (the midpoint of fg/bg's own
     // defaultMinSeconds/defaultMaxSeconds, averaged across both layers),

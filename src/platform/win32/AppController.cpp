@@ -406,8 +406,10 @@ void AppController::Update(float dtSeconds) {
     core::StateMachineInputs inputs;
     switch (stateMachine_.Current()) {
         case core::SaverState::STATE_CONTENT:
-            blackoutTimer_ += dtSeconds;
-            inputs.blackoutElapsed = blackoutTimer_ >= blackoutTargetSeconds_;
+            if (autoCycle_) {
+                blackoutTimer_ += dtSeconds;
+                inputs.blackoutElapsed = blackoutTimer_ >= blackoutTargetSeconds_;
+            }
             break;
         case core::SaverState::STATE_FADEOUT:
             inputs.fadeOutComplete = fadeOut_.Step(dtSeconds) >= 1.0f;

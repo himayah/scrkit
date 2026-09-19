@@ -8,6 +8,7 @@
 //    the conventional Windows fallback for a .scr invoked without a switch)
 
 #include <cwctype>
+#include <cwchar>
 #include <objbase.h>
 #include <shellapi.h>
 #include <string>
@@ -25,6 +26,9 @@ enum class Mode { RunFullScreen, Configure, Preview };
 struct ParsedArgs {
     Mode mode = Mode::Configure;
     HWND parentOrPreviewHwnd = nullptr;
+    // /scrapi:<pipeName> -- the SCRAPI viewer's control pipe (docs/SCRAPI_SPEC.md §3).
+    // Honored only together with /p; ignored for /s and /c.
+    std::wstring scrapiPipeName;
 };
 
 bool StartsWithSwitch(const std::wstring& token, wchar_t letter) {
@@ -55,6 +59,13 @@ ParsedArgs ParseCommandLine() {
 
     for (int i = 1; i < argc; ++i) {
         const std::wstring token = argv[i];
+
+        // Must be tested before the single-letter switches: "/scrapi:..." also starts with "/s".
+        constexpr wchar_t kScrapiPrefix[] = L"/scrapi:";
+        if (token.size() > 8 && _wcsnicmp(token.c_str(), kScrapiPrefix, 8) == 0) {
+            result.scrapiPipeName = token.substr(8);
+            continue;
+        }
 
         if (StartsWithSwitch(token, L's')) {
             result.mode = Mode::RunFullScreen;
@@ -104,7 +115,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*l
             platform::RunFullScreenSaver(hInstance);
             break;
         case Mode::Preview:
-            platform::RunPreview(hInstance, args.parentOrPreviewHwnd);
+            platform::RunPreview(hInstance, args.parentOrPreviewHwnd, args.scrapiPipeName);
             break;
         case Mode::Configure:
         default:
