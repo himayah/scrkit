@@ -200,11 +200,17 @@ void ControlPanel::Rebuild(const scrapi::ControlModel* model) {
 
 void ControlPanel::CreateRow(const ControlNode& node, int depth) {
     rows_.emplace_back();
-    const size_t index = rows_.size() - 1;
     Row& row = rows_.back();
     row.node = &node;
     row.depth = depth;
-    rowById_[node.id] = index;
+    row.visible = false; // not shown until ApplyVisibility says so
+    rowById_[node.id] = rows_.size() - 1;
+}
+
+void ControlPanel::BuildRowWindows(size_t index) {
+    Row& row = rows_[index];
+    const ControlNode& node = *row.node;
+    row.created = true;
     const std::wstring title = Widen(node.label.empty() ? node.id : node.label);
 
     if (node.type == ControlType::Group) {
@@ -290,7 +296,7 @@ void ControlPanel::CreateRow(const ControlNode& node, int depth) {
 }
 
 void ControlPanel::UpdateWidget(Row& row) {
-    if (!model_ || !row.node) return;
+    if (!model_ || !row.node || !row.created) return;
     const ControlNode& n = *row.node;
     const JsonValue* value = model_->Get(n.id);
     if (!value) return;
@@ -374,6 +380,10 @@ void ControlPanel::ApplyVisibility(bool force) {
         if (visible != row.visible) layoutChanged = true;
         row.visible = visible;
         row.enabled = enabled;
+        if (row.visible && !row.created) {
+            BuildRowWindows(static_cast<size_t>(&row - rows_.data()));
+            UpdateWidget(row);
+        }
         const int show = row.visible ? SW_SHOWNA : SW_HIDE;
         auto apply = [&](HWND h) {
             if (!h) return;

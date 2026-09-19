@@ -54,6 +54,9 @@ struct Viewer {
     Phase phase = Phase::None;
     bool sessionStarted = false;
     DWORD launchedAt = 0;
+    // Where the time goes between "open" and "controls visible", shown in the status bar.
+    DWORD connectedAt = 0;
+    DWORD panelMs = 0;
     std::wstring scrPath;
 };
 
@@ -124,12 +127,20 @@ void OpenSaver(const std::wstring& path) {
     g.client = std::make_unique<scrapi::ClientCore>([](const std::string& line) {
         if (g.pipe) g.pipe->SendLine(line);
     });
-    g.client->onManifestChanged = [] { g.panel.Rebuild(g.client->model()); };
+    g.client->onManifestChanged = [] {
+        const DWORD t0 = GetTickCount();
+        g.panel.Rebuild(g.client->model());
+        g.panelMs = GetTickCount() - t0;
+    };
     g.client->onValuesChanged = [](const std::vector<std::string>& ids) { g.panel.Refresh(ids); };
     g.client->onReady = [] {
         g.phase = Phase::Ready;
         const auto& s = g.client->saver();
-        SetStatus(L"Connected: " + Widen(s.name) + L" " + Widen(s.version));
+        const DWORD now = GetTickCount();
+        SetStatus(L"Connected: " + Widen(s.name) + L" " + Widen(s.version) + L"   (saver started in " +
+                  std::to_wstring(g.connectedAt - g.launchedAt) + L" ms, handshake " +
+                  std::to_wstring(now - g.connectedAt - g.panelMs) + L" ms, panel built in " +
+                  std::to_wstring(g.panelMs) + L" ms)");
         LayoutChildren();
     };
     g.client->onFailed = [](const std::string& reason) {
@@ -166,6 +177,7 @@ void Poll() {
     if (g.phase == Phase::Waiting) {
         if (g.pipe->IsConnected() && !g.sessionStarted) {
             g.sessionStarted = true;
+            g.connectedAt = GetTickCount();
             g.client->StartSession("ScrViewer/0.1");
         } else if (!g.pipe->IsConnected() && (g.pipe->IsFailed() || GetTickCount() - g.launchedAt > kConnectGraceMs + 500)) {
             g.phase = Phase::PlainPreview;

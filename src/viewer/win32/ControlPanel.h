@@ -54,10 +54,15 @@ private:
         COLORREF color = 0;    // color controls
         bool visible = true;
         bool enabled = true;
+        bool created = false; // windows are made lazily, the first time the row becomes visible
         int height = 0;
     };
 
+    // Registers a row for `node` without creating any window: the manifest has hundreds of
+    // controls, most hidden behind visibleWhen at any moment, and creating (and, under
+    // double buffering, painting) all of them up front made the panel slow to appear.
     void CreateRow(const scrapi::ControlNode& node, int depth);
+    void BuildRowWindows(size_t index);
     void UpdateWidget(Row& row);
     // Re-evaluates every control's visibleWhen/enabledWhen. Only what actually changed is
     // touched, and the (expensive) relayout+repaint only happens if some row was shown or
