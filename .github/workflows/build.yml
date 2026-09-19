@@ -31,6 +31,13 @@ jobs:
           name: SpiralSuctionSaver-scr
           path: build/src/platform/win32/Release/SpiralSuctionSaver.scr
 
+      # The SCRAPI viewer (docs/DESIGN_VIEWER.md) -- a dev build for now; not attached to releases.
+      - name: Upload ScrViewer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrViewer-exe
+          path: build/src/viewer/win32/Release/ScrViewer.exe
+
   # On a `v*` tag push, attach the just-built .scr to a GitHub Release so
   # users can download a stable, versioned build without running CI
   # themselves or building locally.

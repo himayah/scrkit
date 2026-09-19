@@ -34,4 +34,5 @@ add_test(NAME core_tests COMMAND core_tests)
 
 if(NOT BUILD_CORE_TESTS_ONLY AND WIN32)
     add_subdirectory(src/platform/win32)
+    add_subdirectory(src/viewer/win32)
 endif()

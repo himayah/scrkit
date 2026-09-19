@@ -36,6 +36,10 @@ void ScrApiPipe::Stop() {
         SetEvent(stopEvent_);
         thread_.join();
     }
+    if (serverPipe_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(serverPipe_);
+        serverPipe_ = INVALID_HANDLE_VALUE;
+    }
     if (stopEvent_) {
         CloseHandle(stopEvent_);
         stopEvent_ = nullptr;
@@ -63,15 +67,70 @@ void ScrApiPipe::SendLine(const std::string& line) {
 }
 
 void ScrApiPipe::ThreadMain(std::wstring pipeName, DWORD connectTimeoutMs) {
-    HANDLE pipe = ConnectWithRetry(pipeName, connectTimeoutMs, stopEvent_);
-    if (pipe == INVALID_HANDLE_VALUE) {
-        core::Logger::Warn("ScrApiPipe: could not connect to the viewer's pipe; continuing as a plain preview");
-        failed_ = true;
-        return;
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    if (serverPipe_ != INVALID_HANDLE_VALUE) {
+        // Server mode: wait for the saver to connect to the pipe we already created.
+        pipe = serverPipe_;
+        serverPipe_ = INVALID_HANDLE_VALUE;
+        HANDLE connectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        OVERLAPPED ov{};
+        ov.hEvent = connectEvent;
+        bool connected = false;
+        if (ConnectNamedPipe(pipe, &ov)) {
+            connected = true;
+        } else {
+            const DWORD error = GetLastError();
+            if (error == ERROR_PIPE_CONNECTED) {
+                connected = true; // the client got in between CreateNamedPipe and now
+            } else if (error == ERROR_IO_PENDING) {
+                HANDLE waits[2] = {connectEvent, stopEvent_};
+                const DWORD which = WaitForMultipleObjects(2, waits, FALSE, connectTimeoutMs);
+                if (which == WAIT_OBJECT_0) {
+                    DWORD ignored = 0;
+                    connected = GetOverlappedResult(pipe, &ov, &ignored, FALSE) != FALSE;
+                } else {
+                    CancelIoEx(pipe, &ov);
+                    DWORD ignored = 0;
+                    GetOverlappedResult(pipe, &ov, &ignored, TRUE);
+                }
+            }
+        }
+        CloseHandle(connectEvent);
+        if (!connected) {
+            CloseHandle(pipe);
+            failed_ = true;
+            return;
+        }
+    } else {
+        pipe = ConnectWithRetry(pipeName, connectTimeoutMs, stopEvent_);
+        if (pipe == INVALID_HANDLE_VALUE) {
+            core::Logger::Warn("ScrApiPipe: could not connect to the viewer's pipe; continuing as a plain preview");
+            failed_ = true;
+            return;
+        }
     }
     connected_ = true;
-    core::Logger::Info("ScrApiPipe: connected to viewer");
+    core::Logger::Info("ScrApiPipe: connected");
+    RunIo(pipe);
+}
 
+bool ScrApiPipe::CreateServerPipe(const std::wstring& pipeName) {
+    const std::wstring path = L"\\\\.\\pipe\\" + pipeName;
+    // Default security descriptor: the creating user (plus SYSTEM/Administrators) only.
+    serverPipe_ = CreateNamedPipeW(path.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
+                                   64 * 1024, 64 * 1024, 0, nullptr);
+    return serverPipe_ != INVALID_HANDLE_VALUE;
+}
+
+void ScrApiPipe::StartServing(DWORD connectTimeoutMs) {
+    if (thread_.joinable() || serverPipe_ == INVALID_HANDLE_VALUE) return;
+    stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    wakeEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    thread_ = std::thread([this, connectTimeoutMs] { ThreadMain(std::wstring(), connectTimeoutMs); });
+}
+
+void ScrApiPipe::RunIo(HANDLE pipe) {
     HANDLE readEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     HANDLE writeEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     OVERLAPPED readOv{};
@@ -89,8 +148,11 @@ void ScrApiPipe::ThreadMain(std::wstring pipeName, DWORD connectTimeoutMs) {
             partial.erase(0, pos + 1);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.empty()) continue;
-            std::lock_guard<std::mutex> lock(mutex_);
-            incoming_.push_back(std::move(line));
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                incoming_.push_back(std::move(line));
+            }
+            if (onIncoming_) onIncoming_();
         }
         if (partial.size() > scrapi::kMaxMessageBytes) {
             core::Logger::Warn("ScrApiPipe: oversized message from viewer; dropping the connection");
