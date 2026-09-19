@@ -17,7 +17,7 @@
 
 #include "../../platform/win32/ScrApiPipe.h"
 #include "../../scrapi/ClientCore.h"
-#include "ControlPanel.h"
+#include "ThemedPanel.h"
 #include "ScrLauncher.h"
 
 // Common Controls v6 (visual styles) without a separate manifest file: the linker merges
@@ -46,7 +46,7 @@ struct Viewer {
     HWND main = nullptr;
     HWND host = nullptr;   // the /p parent the .scr renders into
     HWND status = nullptr;
-    viewer::ControlPanel panel;
+    viewer::ThemedPanel panel;
 
     viewer::ScrLauncher launcher;
     std::unique_ptr<platform::ScrApiPipe> pipe;
@@ -287,7 +287,10 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
                                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | SS_SUNKEN, 0, 0, 100, kStatusHeight, g.main,
                                nullptr, instance, nullptr);
     SendMessageW(g.status, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-    g.panel.Create(g.main, instance);
+    if (!g.panel.Create(g.main, instance)) {
+        MessageBoxW(g.main, L"Could not initialize Direct2D/DirectWrite.", L"ScrViewer", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     ShowWindow(g.main, showCommand);
     UpdateWindow(g.main);
     LayoutChildren();
@@ -300,10 +303,8 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(g.panel.hwnd(), &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
     }
     CoUninitialize();
     return static_cast<int>(msg.wParam);
