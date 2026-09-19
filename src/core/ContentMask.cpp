@@ -568,4 +568,18 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
     return result;
 }
 
+BoundaryRefinement FinishContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, std::vector<bool>& mask,
+                                      const std::vector<float>& differingFraction,
+                                      const std::vector<PixelRect>& candidateRects, const ContentMaskConfig& config,
+                                      std::vector<PixelRect>* usedRects) {
+    const std::vector<PixelRect> rects = SelectEvidencedRects(mask, candidateRects, config);
+    ForceRectsIntoMask(mask, rects, config);
+    FillEnclosedMaskHoles(mask, config.gridN);
+    FillMajorityNeighborCells(mask, config.gridN);
+    BoundaryRefinement refinement = RefineBoundaryMask(captureRgba, wallpaperRgba, mask, config, rects);
+    FillBoundaryStraddlingCells(mask, differingFraction, config.gridN);
+    if (usedRects) *usedRects = rects;
+    return refinement;
+}
+
 } // namespace core

@@ -386,4 +386,17 @@ std::vector<PixelRect> SelectEvidencedRects(const std::vector<bool>& rawMask, co
 void ForceRectsIntoMask(std::vector<bool>& mask, const std::vector<PixelRect>& rects,
                          const ContentMaskConfig& config);
 
+// The whole post-processing chain the raw per-cell mask goes through, in the order that matters
+// (each step's rationale is on its own function above): trust only the candidate window
+// rectangles the raw diff corroborates and force their interiors (SelectEvidencedRects,
+// ForceRectsIntoMask), fill enclosed and mostly-surrounded holes, re-evaluate boundary cells at
+// sub-cell resolution following those rectangles (RefineBoundaryMask), then the last-resort
+// straddling-cell fill. `mask` is ComputeContentMask's raw result (with `differingFraction`),
+// modified in place. Returns the sub-cell refinement; `usedRects`, if given, receives the
+// rectangles that were trusted. Shared by the real saver and the SCRAPI preview.
+BoundaryRefinement FinishContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, std::vector<bool>& mask,
+                                      const std::vector<float>& differingFraction,
+                                      const std::vector<PixelRect>& candidateRects, const ContentMaskConfig& config,
+                                      std::vector<PixelRect>* usedRects = nullptr);
+
 } // namespace core

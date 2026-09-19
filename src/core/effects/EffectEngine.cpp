@@ -117,6 +117,15 @@ void EffectEngine::SetDirective(LayerKind layer, const LayerDirective& directive
     SyncCurrentEffectFromTimeline(rt, layer == LayerKind::Foreground ? config_.foreground : config_.background);
 }
 
+void EffectEngine::SetForegroundLayer(LayerSource foreground) {
+    foreground.restMesh = BuildForegroundRestMesh(foreground);
+    fg_.current.reset(); // an effect keeps pointers into the layer it began on: drop it first
+    fg_.hasAppliedEntry = false;
+    fg_.effectElapsedSeconds = 0.0f;
+    fg_.layer = std::move(foreground);
+    fgSM_.Reset(fg_.layer.emptyReason);
+}
+
 EffectEngine::LayerStatus EffectEngine::Status(LayerKind layer) const {
     const LayerRuntime& rt = layer == LayerKind::Foreground ? fg_ : bg_;
     LayerStatus status;

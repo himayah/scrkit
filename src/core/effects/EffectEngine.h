@@ -71,6 +71,11 @@ public:
     // so it takes effect (a running continuous effect eases out first).
     void SetDirective(LayerKind layer, const LayerDirective& directive);
 
+    // Swaps in a new foreground layer (different desktop content) while the engine keeps running:
+    // the current foreground effect is dropped and the layer's state machine restarts under the
+    // directive already in force. The background is untouched.
+    void SetForegroundLayer(LayerSource foreground);
+
     struct LayerStatus {
         bool hasEffect = false;
         EffectId effect = EffectId::FlagWave; // valid only when hasEffect

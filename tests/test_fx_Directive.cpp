@@ -276,3 +276,27 @@ TEST_CASE(Directive_StatusReportsCurrentEffectAndStateName) {
     CHECK(s.effect == EffectId::Ripple);
     CHECK(std::string(core::fx::FxStateToString(s.state)) == "running");
 }
+
+TEST_CASE(Directive_SwappingTheForegroundLayerKeepsTheDirectiveAndRestartsTheLayer) {
+    Rig rig;
+    rig.engine.SetDirective(LayerKind::Foreground, Pin(EffectId::FlagWave));
+    rig.Run(3.0f);
+    CHECK(rig.engine.Status(LayerKind::Foreground).effect == EffectId::FlagWave);
+
+    // New content arrives (e.g. the viewer switched the content source).
+    LayerSource fresh = MakeLayer(LayerKind::Foreground, 10);
+    rig.engine.SetForegroundLayer(std::move(fresh));
+    rig.Run(3.0f);
+    const auto s = rig.engine.Status(LayerKind::Foreground);
+    CHECK(s.hasEffect);
+    CHECK(s.effect == EffectId::FlagWave); // the pin survived the swap
+    CHECK(rig.engine.Status(LayerKind::Background).hasEffect); // background undisturbed
+
+    // An empty foreground (source "none") keeps the layer quiet without breaking anything.
+    LayerSource empty = MakeLayer(LayerKind::Foreground, 10);
+    empty.empty = true;
+    empty.emptyReason = core::fx::EmptyReason::PreviewMode;
+    rig.engine.SetForegroundLayer(std::move(empty));
+    rig.Run(2.0f);
+    CHECK(rig.engine.Status(LayerKind::Foreground).state == FxState::Empty);
+}
