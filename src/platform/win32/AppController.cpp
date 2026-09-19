@@ -27,9 +27,9 @@ std::string RectLabel(const WindowInfo& w) {
 
 // The mask chain's decisions, written to the log so a wrong result (a bogus window rectangle, a flood)
 // can be diagnosed from saver.log instead of guessed at.
-void LogMaskDiagnostics(const char* what, const core::ContentMaskStats& s, const std::vector<std::string>* labels,
+void LogMaskDiagnostics(const char* what, int blurRadius, const core::ContentMaskStats& s, const std::vector<std::string>* labels,
                         const std::vector<bool>& accepted) {
-    core::Logger::Info(std::string("Mask (") + what + ") cells: raw=" + std::to_string(s.raw) + " +rects=" + std::to_string(s.afterRects) +
+    core::Logger::Info(std::string("Mask (") + what + ") blur=" + std::to_string(blurRadius) + " cells: raw=" + std::to_string(s.raw) + " +rects=" + std::to_string(s.afterRects) +
                         " +enclosed=" + std::to_string(s.afterEnclosed) + " +majority=" + std::to_string(s.afterMajority) +
                         " +refine=" + std::to_string(s.afterRefine) + " +straddle=" + std::to_string(s.afterStraddle));
     if (!labels) return;
@@ -215,7 +215,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         boundaryRefinement = core::FinishContentMask(desktopCapture->rgba.data(), attempt.compositedWallpaper.rgba.data(),
                                                        attempt.mask, attempt.differingFraction, candidateRects, maskConfig,
                                                        &usedRects, &accepted, &stats);
-        LogMaskDiagnostics("screensaver", stats, &labels, accepted);
+        LogMaskDiagnostics("screensaver", 0, stats, &labels, accepted);
     }
 
     DecodedImage& compositedWallpaper = attempt.compositedWallpaper;
@@ -373,13 +373,14 @@ void AppController::SetForegroundContent(const DecodedImage* capture, const std:
         cfg.screenHeight = screenHeight_;
         cfg.gridN = gridN_;
         std::vector<float> differing;
-        std::vector<bool> mask = core::ComputeContentMask(capture->rgba.data(), wallpaperRgba_.data(), cfg, &differing);
+        int blurRadius = 0;
+        std::vector<bool> mask = core::ComputeContentMask(capture->rgba.data(), wallpaperRgba_.data(), cfg, &differing, &blurRadius);
         std::vector<core::PixelRect> used;
         std::vector<bool> accepted;
         core::ContentMaskStats stats;
         core::BoundaryRefinement refinement = core::FinishContentMask(capture->rgba.data(), wallpaperRgba_.data(), mask, differing,
                                                                         candidateRects, cfg, &used, &accepted, &stats);
-        LogMaskDiagnostics("preview", stats, candidateLabels, accepted);
+        LogMaskDiagnostics("preview", blurRadius, stats, candidateLabels, accepted);
 
         for (size_t i = 0; i < particles_.size() && i < mask.size(); ++i) {
             if (!mask[i]) continue;
