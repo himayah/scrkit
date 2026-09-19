@@ -3,10 +3,12 @@
 //
 //   ScrViewer.exe [path\to\saver.scr]     (or File > Open, or drop a .scr on the window)
 
+// <windows.h> must come first: <commctrl.h>/<shellapi.h> depend on its types.
+#include <windows.h>
+
 #include <commctrl.h>
 #include <objbase.h>
 #include <shellapi.h>
-#include <windows.h>
 
 #include <algorithm>
 #include <memory>
