@@ -220,14 +220,20 @@ Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string
     source.type = ControlType::Enum;
     source.label = "Foreground content";
     source.presentation = "radio";
-    source.options = {Opt("sample", "Sample desktop", "A built-in desktop: two windows, icons and a taskbar"),
+    source.options = {Opt("sample", "Sample", "A built-in desktop: two windows, icons and a taskbar"),
+                      Opt("desktop", "Desktop", "Your real desktop, captured now (the viewer hides itself for a moment)"),
                       Opt("none", "None", "An empty foreground layer")};
     source.hasDefault = true;
     source.defaultValue = JsonValue::String("sample");
+    ControlNode refresh;
+    refresh.id = "content.refresh";
+    refresh.type = ControlType::Button;
+    refresh.label = "Capture again";
+    refresh.visibleWhen = Eq("content.source", JsonValue::String("desktop"));
     ControlNode overlay = Bool("mask.overlay", "Mask overlay", false);
     overlay.description = "Tint the cells detected as content and outline the window rectangles";
     ControlNode info = Readout("content.info", "Detected");
-    ControlNode contentGroup = Group("group.content", "Content", {source, overlay, info});
+    ControlNode contentGroup = Group("group.content", "Content", {source, refresh, overlay, info});
     contentGroup.presentation = "collapsed";
     m.controls.push_back(std::move(contentGroup));
 
@@ -416,6 +422,10 @@ void SpiralControlBinder::OnSet(const std::vector<ServerCore::Change>& changes) 
 bool SpiralControlBinder::OnInvoke(const std::string& id, const JsonValue&, std::string* error) {
     if (id == "scrapi.step") {
         clock_.RequestStep();
+        return true;
+    }
+    if (id == "content.refresh") {
+        if (host_.refreshContent) host_.refreshContent();
         return true;
     }
     if (id == "scrapi.restart") {

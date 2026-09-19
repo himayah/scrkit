@@ -9,6 +9,7 @@
 #include "../../core/Logger.h"
 #include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
+#include "ScreenCapture.h"
 #include "WallpaperProvider.h"
 #include "WindowRects.h"
 
@@ -189,6 +190,10 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     const std::vector<bool>& mask = attempt.mask;
     wallpaperRgba_ = compositedWallpaper.rgba; // kept for rebuilding the foreground later (SCRAPI preview)
     previewMode_ = isPreviewMode;
+    wallpaperPath_ = wallpaperPath;
+    desktopColor_[0] = desktopR;
+    desktopColor_[1] = desktopG;
+    desktopColor_[2] = desktopB;
 
     backgroundTexture_ = CreateTextureFromImage(compositedWallpaper);
     if (backgroundTexture_ == 0) {
@@ -366,8 +371,51 @@ void AppController::SetForegroundContent(const DecodedImage* capture, const std:
     core::Logger::Info("AppController: foreground content rebuilt (" + contentInfo_ + ")");
 }
 
+void AppController::CaptureDesktopContent() {
+    // Take the capture with the viewer out of the way, or the "desktop" would be the viewer.
+    HWND root = captureHost_ ? GetAncestor(captureHost_, GA_ROOT) : nullptr;
+    const bool hide = root && IsWindow(root) && IsWindowVisible(root);
+    if (hide) {
+        ShowWindow(root, SW_HIDE);
+        Sleep(250); // let the desktop compositor repaint what was underneath
+    }
+    DecodedImage capture;
+    const bool captured = CaptureScreenToImage(screenWidth_, screenHeight_, capture);
+    const std::vector<core::PixelRect> rects = captured ? EnumerateVisibleWindowRects(screenWidth_, screenHeight_) : std::vector<core::PixelRect>();
+    if (hide) ShowWindow(root, SW_SHOWNA);
+
+    if (!captured) {
+        core::Logger::Warn("AppController: desktop capture failed");
+        SetForegroundContent(nullptr, {});
+        contentInfo_ = "capture failed";
+        return;
+    }
+
+    // As in the real saver: composite the wallpaper aligned against this very capture (some
+    // wallpapers, e.g. Spotlight, are cropped off-center), and use it both for the mask diff and
+    // as the visible background so the two agree.
+    DecodedImage image;
+    if (wallpaperPath_.empty() || !DecodeImageFile(wallpaperPath_, image)) {
+        image = MakeFallbackImage(desktopColor_[0], desktopColor_[1], desktopColor_[2]);
+    }
+    DecodedImage aligned;
+    aligned.width = screenWidth_;
+    aligned.height = screenHeight_;
+    aligned.rgba.assign(static_cast<size_t>(screenWidth_) * screenHeight_ * 4, 0);
+    core::CompositeWallpaperAligned(image.rgba.data(), image.width, image.height, aligned.rgba.data(), screenWidth_, screenHeight_,
+                                     GetSystemWallpaperFitMode(), desktopColor_[0], desktopColor_[1], desktopColor_[2],
+                                     capture.rgba.data());
+    wallpaperRgba_ = aligned.rgba;
+    if (backgroundTexture_ != 0) glDeleteTextures(1, &backgroundTexture_);
+    backgroundTexture_ = CreateTextureFromImage(aligned);
+    SetForegroundContent(&capture, rects);
+}
+
 void AppController::ApplyContentSource(const std::string& source) {
-    if (source == "sample" && !wallpaperRgba_.empty()) {
+    contentSource_ = source;
+    if (source == "desktop") {
+        CaptureDesktopContent();
+    } else if (source == "sample" && !wallpaperRgba_.empty()) {
         core::SampleDesktop sample = core::MakeSampleDesktop(wallpaperRgba_.data(), screenWidth_, screenHeight_);
         DecodedImage capture;
         capture.width = screenWidth_;

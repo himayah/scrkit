@@ -70,6 +70,11 @@ public:
     void ApplyContentSource(const std::string& source);
     // Tints the cells detected as content and outlines the window rectangles.
     void SetMaskOverlay(bool on) { maskOverlay_ = on; }
+    // The SCRAPI viewer's preview window: its top-level window is hidden for the moment a real
+    // desktop capture is taken, so the viewer itself doesn't end up in the "desktop".
+    void SetCaptureHost(HWND previewWindow) { captureHost_ = previewWindow; }
+    // Re-runs the current content source ("Capture again" for the real desktop).
+    void RefreshContent() { ApplyContentSource(contentSource_); }
     // Reseeds the random source and starts the show over (both layers, from the beginning).
     void Restart(uint32_t seed);
     // One-line description of what the foreground currently contains.
@@ -139,6 +144,10 @@ private:
     std::vector<OverlayRect> overlayCells_;
     std::vector<OverlayRect> overlayWindows_;
     std::string contentInfo_ = "none";
+    std::string contentSource_ = "sample";
+    HWND captureHost_ = nullptr;
+    std::wstring wallpaperPath_;           // for recompositing the wallpaper against a fresh capture
+    uint8_t desktopColor_[3] = {30, 40, 60};
     bool previewMode_ = false;
     // Basis for blackoutTargetSeconds_'s random draw: roughly 10x a single
     // effect's typical duration (the midpoint of fg/bg's own
@@ -153,6 +162,7 @@ private:
     void SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects);
     core::fx::LayerSource MakeForegroundSource(const std::vector<int>& cellIndices, bool hasContent) const;
     void DrawMaskOverlay() const;
+    void CaptureDesktopContent();
 
     void PickNewBlackoutTarget();
     void OnStateEntered(core::SaverState newState);

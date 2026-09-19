@@ -18,6 +18,7 @@ core::SpiralHostHooks HooksFor(AppController& app) {
     h.setMaskOverlay = [&app](bool on) { app.SetMaskOverlay(on); };
     h.restart = [&app](uint32_t seed) { app.Restart(seed); };
     h.contentInfo = [&app] { return app.ContentInfo(); };
+    h.refreshContent = [&app] { app.RefreshContent(); };
     return h;
 }
 } // namespace
@@ -29,6 +30,7 @@ ScrApiHost::ScrApiHost(AppController& app, const core::ConfigModel& config, HWND
         core::BuildSpiralManifest(config.effects, core::kAppVersion), binder_.Hooks(),
         [this](const std::string& line) { pipe_.SendLine(line); });
     binder_.Attach(*server_);
+    app.SetCaptureHost(viewport);
     binder_.ApplyInitialState(); // e.g. build the sample desktop for the foreground
     server_->SetViewportHandle(static_cast<int64_t>(reinterpret_cast<intptr_t>(viewport)));
     pipe_.Start(pipeName);

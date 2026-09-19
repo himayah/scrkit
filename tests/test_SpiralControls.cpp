@@ -328,6 +328,7 @@ struct HostLog {
     std::vector<bool> overlays;
     std::vector<uint32_t> restarts;
     std::string info = "412 cells, 3 windows";
+    int refreshes = 0;
 };
 
 core::SpiralHostHooks HooksFor(HostLog& log) {
@@ -336,6 +337,7 @@ core::SpiralHostHooks HooksFor(HostLog& log) {
     h.setMaskOverlay = [&log](bool on) { log.overlays.push_back(on); };
     h.restart = [&log](uint32_t seed) { log.restarts.push_back(seed); };
     h.contentInfo = [&log] { return log.info; };
+    h.refreshContent = [&log] { ++log.refreshes; };
     return h;
 }
 
@@ -415,6 +417,19 @@ TEST_CASE(SpiralHost_SeedChangeAndRestartButtonRestartWithTheSeed) {
     CHECK_EQ(rig.log.restarts[1], static_cast<uint32_t>(777)); // the current seed
 }
 
+TEST_CASE(SpiralHost_CaptureAgainIsOnlyShownForTheDesktopSourceAndInvokesTheHost) {
+    HostRig rig;
+    CHECK(!rig.client.model()->IsVisible("content.refresh"));   // sample: nothing to recapture
+    rig.Set("content.source", JsonValue::String("desktop"));
+    CHECK(rig.log.sources.back() == "desktop");
+    CHECK(rig.client.model()->IsVisible("content.refresh"));
+    bool ok = false;
+    rig.client.Invoke("content.refresh", JsonValue::Null(), [&](const ClientCore::Reply& r) { ok = r.ok; });
+    rig.Pump();
+    CHECK(ok);
+    CHECK_EQ(rig.log.refreshes, 1);
+}
+
 TEST_CASE(SpiralHost_ContentInfoIsPublishedAsAReadout) {
     HostRig rig;
     rig.binder.PublishStatus();
@@ -427,7 +442,7 @@ TEST_CASE(SpiralManifest_ContentAndSimulationControlsExist) {
     const Manifest m = BuildSpiralManifest(fx::MakeDefaultEngineConfig(), "t");
     std::string error;
     CHECK(scrapi::ValidateManifest(m, &error));
-    for (const char* id : {"content.source", "mask.overlay", "content.info", "scrapi.seed", "scrapi.restart"}) {
+    for (const char* id : {"content.source", "content.refresh", "mask.overlay", "content.info", "scrapi.seed", "scrapi.restart"}) {
         CHECK(scrapi::FindControl(m, id) != nullptr);
     }
     CHECK(scrapi::FindControl(m, "group.content")->presentation == "collapsed");
