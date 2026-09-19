@@ -138,7 +138,10 @@ bool ControlPanel::Create(HWND parent, HINSTANCE instance) {
     lf.lfWeight = FW_BOLD;
     boldFont_ = CreateFontIndirectW(&lf);
 
-    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+    // WS_EX_COMPOSITED double-buffers the painting of the panel and all its children, so a
+    // scroll step shows each control's finished pixels rather than the half-repainted state
+    // (visible as flicker, worst on the many checkboxes of a flags control).
+    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT | WS_EX_COMPOSITED, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                             0, 0, 100, 100, parent, nullptr, instance, this);
     return hwnd_ != nullptr;
 }
