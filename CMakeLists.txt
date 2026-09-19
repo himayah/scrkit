@@ -18,6 +18,13 @@ file(GLOB CORE_SOURCES CONFIGURE_DEPENDS
 add_library(spiral_core STATIC ${CORE_SOURCES})
 target_include_directories(spiral_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
+# SCRAPI (docs/SCRAPI_SPEC.md): the saver-agnostic control-channel library, shared by
+# the saver (server side) and the viewer (client side). Platform-independent like core.
+file(GLOB SCRAPI_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/scrapi/*.cpp)
+add_library(scrapi STATIC ${SCRAPI_SOURCES})
+target_include_directories(scrapi PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(spiral_core PUBLIC scrapi)
+
 enable_testing()
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.cpp)
 add_executable(core_tests ${TEST_SOURCES})

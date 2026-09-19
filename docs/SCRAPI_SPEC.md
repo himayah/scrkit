@@ -59,7 +59,7 @@ JSON 内の改行は `\n` にエスケープする。手動デバッグ(テキ�
 // ビュワー → セーバー (要求)
 {"id": 12, "op": "set", "values": {"fg.effect": "FlagWave"}}
 // セーバー → ビュワー (応答。id は要求と同じ)
-{"id": 12, "ok": true, "results": {"fg.effect": {"value": "FlagWave"}}}
+{"id": 12, "ok": true, "results": {"fg.effect": {"ok": true, "value": "FlagWave"}}}
 {"id": 13, "ok": false, "error": {"code": "unknownId", "message": "no control 'x'"}}
 // セーバー → ビュワー (イベント。id なし)
 {"ev": "changed", "values": {"fg.currentEffect": "FlagWave"}}
@@ -74,10 +74,10 @@ JSON 内の改行は `\n` にエスケープする。手動デバッグ(テキ�
 | op | 方向 | 内容 |
 |---|---|---|
 | `hello` | V→S | 最初に必ず送る。`{"apiVersion":"1.0","client":"ScrViewer/0.1"}`。応答: `{"apiVersion":"1.0","saver":{"id","name","version"},"capabilities":[...],"viewportHwnd":<整数>}` |
-| `manifest` | V→S | マニフェスト全体を返す(§5)。応答に `rev`(改訂番号)を含む |
-| `get` | V→S | `{"ids":[...]}` の現在値を返す。省略時は全コントロール |
-| `set` | V→S | `{"values":{id:値,...}}`。**1 メッセージ内は原子的**に(同一フレーム境界で)適用する。応答は id ごとに適用後の値(範囲外はクランプされた値)を返す |
-| `invoke` | V→S | `{"id":"<button のid>","args":{...}}`。ボタン/アクション実行 |
+| `manifest` | V→S | 応答 `{"manifest":{...}}`(§5。`rev` は改訂番号でマニフェスト内に含まれる) |
+| `get` | V→S | `{"ids":[...]}` の現在値を `{"values":{...}}` で返す。省略時は値を持つ全コントロール。未知の id が 1 つでもあれば `unknownId` |
+| `set` | V→S | `{"values":{id:値,...}}`。**1 メッセージ内は原子的**に(同一フレーム境界で)適用する。応答は `{"results":{id:{"ok":true,"value":<適用後の値(範囲外はクランプ済み)>} \| {"ok":false,"error":{...}}}}`。要求自体は成功(`ok:true`)で、不正な id/値は id ごとのエラーになり、有効な分だけ適用される |
+| `invoke` | V→S | `{"control":"<button のid>","args":{...}}`。ボタン/アクション実行(対象は `control`。`id` は要求の通し番号なので使わない) |
 | `subscribe` | V→S | `{"ids":["..."]\|"*","maxHz":10}`。指定コントロールの変化を `changed` イベントで受け取る(`readout` はセーバー側の変化で更新される) |
 | `bye` | 双方向 | 正常終了通知。受け取った側は接続を閉じる |
 
@@ -112,7 +112,7 @@ JSON 内の改行は `\n` にエスケープする。手動デバッグ(テキ�
 
 | プロパティ | 必須 | 内容 |
 |---|---|---|
-| `id` | ○(全ノード) | セーバー内で一意。`[a-z0-9_.-]`、`.` で名前空間を区切る。`scrapi.` 始まりは予約(§6) |
+| `id` | ○(全ノード) | セーバー内で一意。`[A-Za-z0-9_.-]`、`.` で名前空間を区切る。`scrapi.` 始まりは予約(§6) |
 | `type` | ○ | §5.2 の型。未知の型は汎用の読み取り専用テキストとして表示してよい |
 | `label` | 推奨 | 表示名 |
 | `description` | 任意 | ツールチップ/補助テキスト |
