@@ -739,30 +739,110 @@ TEST_CASE(RefineBoundaryMask_RecoversContentConcentratedInOneQuadrant) {
     CHECK(refinement.cells.count(1) == 1);
 }
 
-TEST_CASE(RefineBoundaryMask_RecoversContentVisibleOnlyAtTheDeepestLevel) {
-    // Same boundary setup, but the real content this time is a single
-    // 10x10px patch (one leaf at the default depth-3 resolution, 80/8=10px
-    // per leaf) tucked in cell(0,1)'s far corner. Its coverage reads under
-    // 30% at *every* coarser level on the way down (whole cell: 100/6400 =
-    // 1.6%; its depth-1 quadrant: 100/1600 = 6.25%; its depth-2 sub-quadrant:
-    // 100/400 = 25%) and only clears the bar at the leaf itself (100/100 =
-    // 100%) -- proving refinement doesn't stop just because an intermediate
-    // level's own verdict already happens to agree with a coarser one.
+TEST_CASE(RefineBoundaryMask_RecoversContentDilutedAtEveryCoarserLevel) {
+    // Same boundary setup, but the real content is a small 20x20px patch tucked in cell(0,1)'s far
+    // corner: 400/6400 = 6% of the whole cell and 25% of its depth-1 quadrant -- both under the 30%
+    // bar -- and only clears it at the depth-2 sub-quadrant / leaf level. It is a connected group of
+    // leaves (2x2), so it survives the noise filter and the cell is recovered.
     const int width = 160, height = 160, gridN = 2;
     auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
     auto capture = SolidBuffer(width, height, 255, 255, 255);
     FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);       // cell(0,0): fully content
-    FillRect(capture, width, 150, 0, 160, 10, 0, 0, 0);    // cell(0,1): one far-corner 10x10 leaf
+    FillRect(capture, width, 140, 0, 160, 20, 0, 0, 0);    // cell(0,1): far-corner 20x20 patch
 
     ContentMaskConfig config;
     config.screenWidth = width;
     config.screenHeight = height;
     config.gridN = gridN;
     auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
-    CHECK(!mask[1]); // coarse pass misses the tiny, deeply-diluted patch
+    CHECK(!mask[1]); // coarse pass misses the tiny, diluted patch
 
     auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
-    CHECK(mask[1]); // recovered anyway -- full-depth recursion, not adaptive early-stopping
+    CHECK(mask[1]);
+}
+
+TEST_CASE(RefineBoundaryMask_AnIsolatedSingleLeafIsTreatedAsNoise) {
+    // A lone 10x10px leaf that differs is indistinguishable from wallpaper texture noise; only a
+    // connected group of leaves counts as evidence of a real edge.
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);
+    FillRect(capture, width, 150, 0, 160, 10, 0, 0, 0);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    CHECK(!mask[1]);
+}
+
+TEST_CASE(RefineBoundaryMask_SpeckleNoiseNextToAnEdgeDoesNotFloodTheSurroundings) {
+    // Real-machine bug: on a textured wallpaper, refinement promoted cells around every icon and the
+    // promotions cascaded (each promoted cell made its neighbors "boundary" cells too), turning the
+    // whole area into foreground. Reproduce with a solid block next to a large speckled area.
+    const int width = 640, height = 640, gridN = 32; // 20px cells
+    auto wallpaper = SolidBuffer(width, height, 128, 128, 128);
+    auto capture = wallpaper;
+    FillRect(capture, width, 0, 0, 100, 100, 0, 0, 0); // a real content block in the top-left
+    // Isolated texture-like speckle everywhere else: small 3x3px squares that differ strongly
+    // (a 5x5 blur still leaves them well over the pixel threshold), deterministic.
+    uint32_t state = 12345;
+    for (int n = 0; n < 2500; ++n) {
+        state = state * 1664525u + 1013904223u;
+        const int x = 110 + static_cast<int>((state >> 8) % (width - 115));
+        state = state * 1664525u + 1013904223u;
+        const int y = static_cast<int>((state >> 8) % (height - 5));
+        FillRect(capture, width, x, y, x + 3, y + 3, 255, 255, 255);
+    }
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    int before = 0;
+    for (bool b : mask) before += b ? 1 : 0;
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    int after = 0;
+    for (bool b : mask) after += b ? 1 : 0;
+    // Refinement may add at most a ring around the real block's own edge, however noisy the rest is.
+    CHECK(after <= before + 24);
+}
+
+TEST_CASE(RefineBoundaryMask_PromotionDoesNotCascadeToNeighboringCells) {
+    // One real content cell in the middle of a noisy field: only its direct neighbors are boundary
+    // cells, and promoting one of them must not make *its* neighbors boundary cells.
+    const int width = 320, height = 320, gridN = 16; // 20px cells
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+    auto capture = wallpaper;
+    FillRect(capture, width, 140, 140, 180, 180, 255, 255, 255); // 2x2 cells of solid content
+    // A 6px-wide bright fringe just outside the block on its right: a genuine edge sliver.
+    FillRect(capture, width, 180, 140, 186, 180, 255, 255, 255);
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    const std::vector<bool> raw = mask;
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    // The blur bleeds a real edge ~2px into the next cell, so a ring of directly adjacent cells may
+    // legitimately be promoted; but nothing farther than ONE cell from a cell that was content
+    // before (that would be a cascade).
+    for (int row = 0; row < gridN; ++row) {
+        for (int col = 0; col < gridN; ++col) {
+            if (!mask[static_cast<size_t>(row) * gridN + col]) continue;
+            bool nearRaw = false;
+            for (int dr = -1; dr <= 1; ++dr) {
+                for (int dc = -1; dc <= 1; ++dc) {
+                    const int r = row + dr, c = col + dc;
+                    if (r >= 0 && c >= 0 && r < gridN && c < gridN && raw[static_cast<size_t>(r) * gridN + c]) nearRaw = true;
+                }
+            }
+            CHECK(nearRaw);
+        }
+    }
 }
 
 TEST_CASE(RefineBoundaryMask_NeverDemotesAnAlreadyFlaggedCell) {

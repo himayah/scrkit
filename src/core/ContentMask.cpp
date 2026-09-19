@@ -211,30 +211,27 @@ bool RegionCenterInAnyRect(const std::vector<PixelRect>& rects, int x0, int x1, 
     return false;
 }
 
-// Recursively evaluates one quadrant of a boundary cell, unconditionally
-// subdividing every quadrant down to maxDepth (not just the ones that look
-// ambiguous at a coarser scale) -- see RefineBoundaryMask's doc comment for
-// why stopping early on "this quadrant's own verdict already agrees with its
-// parent's" would miss real content that's diluted at every intermediate
-// scale but concentrated only at the deepest one (e.g. a window corner that
-// clips a cell narrowly enough that neither the whole cell nor either
-// half it falls in ever individually clears cellDifferingFraction, even
-// though an actual, real sliver of content is there). Startup-only cost
-// (see ContentMaskConfig::boundaryRefineMaxDepth), so there's no reason to
-// trade that thoroughness away for a cost saving that doesn't matter here.
+// Recursively subdivides one quadrant of a boundary cell down to maxDepth and evaluates only the
+// leaves (regions too small to subdivide further count as leaves and fill their whole span).
+// Nothing stops early: content diluted at every coarser scale but concentrated at the finest one
+// must still be found. Coarser levels are deliberately NOT evaluated: an intermediate region's
+// verdict is not needed and, on a textured wallpaper, is noise (a stray 30%-differing quadrant
+// says nothing about a real edge). `forcedLeaves` marks leaves that are content because a trusted
+// window rectangle covers them, as opposed to leaves that merely *look* different: only the latter
+// are subject to the noise filter in RefineBoundaryMask.
 void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width, int height, float gain,
                      const ContentMaskConfig& config, int x0, int x1, int y0, int y1, int depth, int maxDepth,
                      int leafGrid, int leafX0, int leafY0, int leafSpan, std::vector<bool>& leaves,
-                     bool& anyLeafFlagged, const std::vector<PixelRect>& forcedRects) {
-    const bool flagged = RegionCenterInAnyRect(forcedRects, x0, x1, y0, y1) ||
-                         EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config);
-    anyLeafFlagged = anyLeafFlagged || flagged;
-
+                     std::vector<bool>& forcedLeaves, const std::vector<PixelRect>& forcedRects) {
     const bool canSubdivide = depth < maxDepth && (x1 - x0) >= 2 && (y1 - y0) >= 2;
     if (!canSubdivide) {
+        const bool forced = RegionCenterInAnyRect(forcedRects, x0, x1, y0, y1);
+        const bool flagged =
+            forced || EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config);
         for (int ly = leafY0; ly < leafY0 + leafSpan; ++ly) {
             for (int lx = leafX0; lx < leafX0 + leafSpan; ++lx) {
                 leaves[static_cast<size_t>(ly) * leafGrid + lx] = flagged;
+                forcedLeaves[static_cast<size_t>(ly) * leafGrid + lx] = forced;
             }
         }
         return;
@@ -244,13 +241,48 @@ void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, in
     const int ym = (y0 + y1) / 2;
     const int childSpan = leafSpan / 2;
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, y0, ym, depth + 1, maxDepth,
-                   leafGrid, leafX0, leafY0, childSpan, leaves, anyLeafFlagged, forcedRects);
+                   leafGrid, leafX0, leafY0, childSpan, leaves, forcedLeaves, forcedRects);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, y0, ym, depth + 1, maxDepth,
-                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, anyLeafFlagged, forcedRects);
+                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, forcedLeaves, forcedRects);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, ym, y1, depth + 1, maxDepth,
-                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged, forcedRects);
+                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, forcedLeaves, forcedRects);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, ym, y1, depth + 1, maxDepth,
-                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged, forcedRects);
+                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, forcedLeaves, forcedRects);
+}
+
+// Clears every 4-connected group of set leaves smaller than `minSize`. A real edge (a window
+// border, an icon's outline) lights up a connected run of leaves; a textured wallpaper produces
+// isolated random ones, which would otherwise make speckle opaque and, worse, get a whole cell
+// promoted to content.
+void DropSmallLeafGroups(std::vector<bool>& leaves, int leafGrid, int minSize) {
+    if (minSize <= 1) return;
+    std::vector<bool> seen(leaves.size(), false);
+    std::vector<size_t> group, stack;
+    for (size_t start = 0; start < leaves.size(); ++start) {
+        if (!leaves[start] || seen[start]) continue;
+        group.clear();
+        stack.assign(1, start);
+        seen[start] = true;
+        while (!stack.empty()) {
+            const size_t cur = stack.back();
+            stack.pop_back();
+            group.push_back(cur);
+            const int cx = static_cast<int>(cur % leafGrid), cy = static_cast<int>(cur / leafGrid);
+            const int nx[4] = {cx - 1, cx + 1, cx, cx};
+            const int ny[4] = {cy, cy, cy - 1, cy + 1};
+            for (int k = 0; k < 4; ++k) {
+                if (nx[k] < 0 || ny[k] < 0 || nx[k] >= leafGrid || ny[k] >= leafGrid) continue;
+                const size_t n = static_cast<size_t>(ny[k]) * leafGrid + nx[k];
+                if (leaves[n] && !seen[n]) {
+                    seen[n] = true;
+                    stack.push_back(n);
+                }
+            }
+        }
+        if (static_cast<int>(group.size()) < minSize) {
+            for (size_t g : group) leaves[g] = false;
+        }
+    }
 }
 
 } // namespace
@@ -538,30 +570,46 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
     const int leafGrid = 1 << config.boundaryRefineMaxDepth;
     result.leafGrid = leafGrid;
 
+    // Which cells are boundary cells is decided from the mask as it was on entry. Deciding from the
+    // mask while promoting cells made each promotion turn its neighbors into boundary cells too, and
+    // on a textured wallpaper the promotions cascaded across the whole area around an edge.
+    const std::vector<bool> original = mask;
+    const int minGroup = std::max(1, std::min(3, leafGrid * leafGrid / 4));
+
     for (int row = 0; row < gridN; ++row) {
         const int y0 = (row * height) / gridN;
         const int y1 = ((row + 1) * height) / gridN;
         for (int col = 0; col < gridN; ++col) {
             const size_t cellIndex = static_cast<size_t>(row) * gridN + col;
-            const bool self = mask[cellIndex];
-            bool isBoundary = (row > 0 && mask[cellIndex - static_cast<size_t>(gridN)] != self) ||
-                               (row + 1 < gridN && mask[cellIndex + static_cast<size_t>(gridN)] != self) ||
-                               (col > 0 && mask[cellIndex - 1] != self) ||
-                               (col + 1 < gridN && mask[cellIndex + 1] != self);
+            const bool self = original[cellIndex];
+            const bool isBoundary = (row > 0 && original[cellIndex - static_cast<size_t>(gridN)] != self) ||
+                                     (row + 1 < gridN && original[cellIndex + static_cast<size_t>(gridN)] != self) ||
+                                     (col > 0 && original[cellIndex - 1] != self) ||
+                                     (col + 1 < gridN && original[cellIndex + 1] != self);
             if (!isBoundary) continue;
 
             const int x0 = (col * width) / gridN;
             const int x1 = ((col + 1) * width) / gridN;
             if (x1 - x0 < 2 || y1 - y0 < 2) continue; // too small to usefully subdivide
 
-            std::vector<bool> leaves(static_cast<size_t>(leafGrid) * leafGrid, self);
-            bool anyLeafFlagged = false;
+            std::vector<bool> leaves(static_cast<size_t>(leafGrid) * leafGrid, false);
+            std::vector<bool> forced(leaves.size(), false);
             RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, x1, y0, y1, /*depth=*/0,
-                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, anyLeafFlagged, forcedRects);
+                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, forced, forcedRects);
 
-            // Only ever promote -- see the function's doc comment on why a
-            // cell already `true` is left alone even if every leaf disagrees.
-            if (!self && anyLeafFlagged) mask[cellIndex] = true;
+            // Noise filter: only evidence groups of connected leaves count (forced leaves always do).
+            std::vector<bool> evidence(leaves.size());
+            for (size_t i = 0; i < leaves.size(); ++i) evidence[i] = leaves[i] && !forced[i];
+            DropSmallLeafGroups(evidence, leafGrid, minGroup);
+            bool any = false;
+            for (size_t i = 0; i < leaves.size(); ++i) {
+                leaves[i] = forced[i] || evidence[i];
+                any = any || leaves[i];
+            }
+
+            // Only ever promote -- see the function's doc comment on why a cell already `true` is
+            // left alone even if every leaf disagrees.
+            if (!self && any) mask[cellIndex] = true;
             result.cells[static_cast<int>(cellIndex)] = std::move(leaves);
         }
     }
