@@ -25,6 +25,12 @@ namespace core {
 // the real-desktop capture before diffing them.
 void ResampleRgba(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH);
 
+// Area-averaging (downscale) / linear (upscale) resample of a top-down RGBA8 buffer, separable, the
+// way an image is normally scaled for display. ResampleRgba (nearest neighbor) picks single source
+// pixels, which on a large, finely textured wallpaper produces aliasing noise that no real screen
+// shows -- and comparing such a reference with a real capture flags nearly every pixel.
+void ResampleRgbaSmooth(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH);
+
 // Which of `gridN` evenly-distributed cells covering [0, totalSize) a given
 // pixel coordinate falls into -- the exact inverse of the cell-boundary
 // convention core::ComputeContentMask uses internally (cell k spans
@@ -202,9 +208,24 @@ struct PixelRect {
 // fraction *before* the cellDifferingFraction cutoff or the texture-
 // flatness fallback) -- FillBoundaryStraddlingCells' evidence for cells a
 // real window edge only partially covers.
+//
+// The box-blur radius is chosen from the data (see ChooseBlurRadius): 2 when the wallpaper reference
+// matches the capture, wider when it doesn't match at fine scale (a finely textured wallpaper the
+// reference reproduces only approximately), so that mismatch isn't reported as content. Reported
+// through `outBlurRadius` when non-null.
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config,
-                                      std::vector<float>* outDifferingFraction = nullptr);
+                                      std::vector<float>* outDifferingFraction = nullptr,
+                                      int* outBlurRadius = nullptr);
+
+// The smallest blur radius (2, 3, 4, 6, 8 or 12) at which the quietest parts of the screen no longer
+// look different from the wallpaper reference: the 25th percentile, over a coarse tile grid, of the
+// fraction of pixels whose blurred difference exceeds pixelDiffThreshold must be at most 10%. A
+// pixel-exact reference already passes at radius 2, so it stays 2 and behavior is unchanged; a
+// reference that differs at fine scale everywhere (~1px misalignment or different resampling on a
+// high-contrast texture) needs a wider blur first. Real content is clustered, so a desktop mostly
+// covered by windows still has quiet tiles and is not mistaken for a mismatch.
+int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, const ContentMaskConfig& config);
 
 // Returns true if `mask` flags at least `threshold` (default 90%) of its
 // cells as content -- a strong signal that `captureRgba` and `wallpaperRgba`

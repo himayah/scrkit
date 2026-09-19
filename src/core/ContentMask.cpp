@@ -23,7 +23,7 @@ constexpr float kMaxBrightnessGain = 4.0f;
 // Gaussian blur, against saved debug_capture.bmp/debug_wallpaper.bmp) found
 // 3x3 through 9x9 boxes all gave essentially the same result, so this isn't
 // a sensitive knob -- 5x5 is a reasonable middle ground.
-constexpr int kBoxBlurRadius = 2;
+constexpr int kBoxBlurRadius = 2; // the smallest radius; ChooseBlurRadius may pick a wider one
 
 // Per-pixel luminance ratio (capture/wallpaper) at one pixel, used to
 // derive the brightness gain below via its *median* across the whole
@@ -164,14 +164,14 @@ void BlurredPixel(const uint8_t* rgba, int width, int height, int x, int y, int 
 // arbitrary [x0,x1) x [y0,y1) pixel rectangle (a boundary cell's sub-region
 // during recursive refinement).
 bool EvaluateRegionFlagged(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width, int height,
-                            int x0, int x1, int y0, int y1, float gain, const ContentMaskConfig& config) {
+                            int x0, int x1, int y0, int y1, float gain, const ContentMaskConfig& config, int blurRadius) {
     long long differing = 0, total = 0;
     double captureSum = 0.0, captureSumSq = 0.0, wallpaperSum = 0.0, wallpaperSumSq = 0.0;
     for (int y = y0; y < y1; ++y) {
         for (int x = x0; x < x1; ++x) {
             float bc[3], bw[3];
-            BlurredPixel(captureRgba, width, height, x, y, kBoxBlurRadius, false, gain, bc);
-            BlurredPixel(wallpaperRgba, width, height, x, y, kBoxBlurRadius, true, gain, bw);
+            BlurredPixel(captureRgba, width, height, x, y, blurRadius, false, gain, bc);
+            BlurredPixel(wallpaperRgba, width, height, x, y, blurRadius, true, gain, bw);
             const int diff = static_cast<int>(std::abs(bc[0] - bw[0]) + std::abs(bc[1] - bw[1]) + std::abs(bc[2] - bw[2]));
             if (diff > config.pixelDiffThreshold) ++differing;
             ++total;
@@ -222,12 +222,12 @@ bool RegionCenterInAnyRect(const std::vector<PixelRect>& rects, int x0, int x1, 
 void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width, int height, float gain,
                      const ContentMaskConfig& config, int x0, int x1, int y0, int y1, int depth, int maxDepth,
                      int leafGrid, int leafX0, int leafY0, int leafSpan, std::vector<bool>& leaves,
-                     std::vector<bool>& forcedLeaves, const std::vector<PixelRect>& forcedRects) {
+                     std::vector<bool>& forcedLeaves, const std::vector<PixelRect>& forcedRects, int blurRadius) {
     const bool canSubdivide = depth < maxDepth && (x1 - x0) >= 2 && (y1 - y0) >= 2;
     if (!canSubdivide) {
         const bool forced = RegionCenterInAnyRect(forcedRects, x0, x1, y0, y1);
         const bool flagged =
-            forced || EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config);
+            forced || EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config, blurRadius);
         for (int ly = leafY0; ly < leafY0 + leafSpan; ++ly) {
             for (int lx = leafX0; lx < leafX0 + leafSpan; ++lx) {
                 leaves[static_cast<size_t>(ly) * leafGrid + lx] = flagged;
@@ -241,13 +241,13 @@ void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, in
     const int ym = (y0 + y1) / 2;
     const int childSpan = leafSpan / 2;
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, y0, ym, depth + 1, maxDepth,
-                   leafGrid, leafX0, leafY0, childSpan, leaves, forcedLeaves, forcedRects);
+                   leafGrid, leafX0, leafY0, childSpan, leaves, forcedLeaves, forcedRects, blurRadius);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, y0, ym, depth + 1, maxDepth,
-                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, forcedLeaves, forcedRects);
+                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, forcedLeaves, forcedRects, blurRadius);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, ym, y1, depth + 1, maxDepth,
-                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, forcedLeaves, forcedRects);
+                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, forcedLeaves, forcedRects, blurRadius);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, ym, y1, depth + 1, maxDepth,
-                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, forcedLeaves, forcedRects);
+                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, forcedLeaves, forcedRects, blurRadius);
 }
 
 // Clears every 4-connected group of set leaves smaller than `minSize`. A real edge (a window
@@ -301,9 +301,138 @@ void ResampleRgba(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW
     }
 }
 
+namespace {
+
+// One output sample of a separable resample: a run of source indices with weights summing to 1.
+struct Taps {
+    int first = 0;
+    std::vector<float> w;
+};
+
+void BuildTaps(int srcN, int dstN, std::vector<Taps>& taps) {
+    taps.assign(static_cast<size_t>(dstN), Taps());
+    const double s = static_cast<double>(srcN) / dstN;
+    for (int i = 0; i < dstN; ++i) {
+        Taps& t = taps[static_cast<size_t>(i)];
+        if (dstN < srcN) { // downscale: exact area coverage
+            const double a = i * s, b = (i + 1) * s;
+            const int first = static_cast<int>(std::floor(a));
+            const int last = std::min(srcN - 1, static_cast<int>(std::ceil(b)) - 1);
+            t.first = first;
+            for (int j = first; j <= last; ++j) {
+                const double overlap = std::min<double>(j + 1, b) - std::max<double>(j, a);
+                t.w.push_back(static_cast<float>(std::max(0.0, overlap) / s));
+            }
+        } else { // upscale (or same size): linear between the two nearest sample centers
+            const double pos = (i + 0.5) * s - 0.5;
+            const int j0 = static_cast<int>(std::floor(pos));
+            const float f = static_cast<float>(pos - j0);
+            const int a = std::clamp(j0, 0, srcN - 1), b = std::clamp(j0 + 1, 0, srcN - 1);
+            t.first = a;
+            if (a == b) {
+                t.w = {1.0f};
+            } else {
+                t.w = {1.0f - f, f};
+            }
+        }
+        float sum = 0.0f;
+        for (float w : t.w) sum += w;
+        if (sum > 0.0f) {
+            for (float& w : t.w) w /= sum;
+        }
+    }
+}
+
+} // namespace
+
+void ResampleRgbaSmooth(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH) {
+    if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+    std::vector<Taps> xTaps, yTaps;
+    BuildTaps(srcW, dstW, xTaps);
+    BuildTaps(srcH, dstH, yTaps);
+
+    // Horizontal pass into an 8-bit intermediate (dstW x srcH), then vertical into `dst`.
+    std::vector<uint8_t> mid(static_cast<size_t>(dstW) * srcH * 4);
+    for (int y = 0; y < srcH; ++y) {
+        const uint8_t* row = src + static_cast<size_t>(y) * srcW * 4;
+        uint8_t* out = &mid[static_cast<size_t>(y) * dstW * 4];
+        for (int x = 0; x < dstW; ++x) {
+            const Taps& t = xTaps[static_cast<size_t>(x)];
+            float r = 0, g = 0, b = 0;
+            for (size_t k = 0; k < t.w.size(); ++k) {
+                const uint8_t* p = row + static_cast<size_t>(t.first + static_cast<int>(k)) * 4;
+                r += p[0] * t.w[k];
+                g += p[1] * t.w[k];
+                b += p[2] * t.w[k];
+            }
+            out[x * 4 + 0] = static_cast<uint8_t>(r + 0.5f);
+            out[x * 4 + 1] = static_cast<uint8_t>(g + 0.5f);
+            out[x * 4 + 2] = static_cast<uint8_t>(b + 0.5f);
+            out[x * 4 + 3] = 255;
+        }
+    }
+    for (int y = 0; y < dstH; ++y) {
+        const Taps& t = yTaps[static_cast<size_t>(y)];
+        uint8_t* out = dst + static_cast<size_t>(y) * dstW * 4;
+        for (int x = 0; x < dstW; ++x) {
+            float r = 0, g = 0, b = 0;
+            for (size_t k = 0; k < t.w.size(); ++k) {
+                const uint8_t* p = &mid[(static_cast<size_t>(t.first + static_cast<int>(k)) * dstW + x) * 4];
+                r += p[0] * t.w[k];
+                g += p[1] * t.w[k];
+                b += p[2] * t.w[k];
+            }
+            out[x * 4 + 0] = static_cast<uint8_t>(r + 0.5f);
+            out[x * 4 + 1] = static_cast<uint8_t>(g + 0.5f);
+            out[x * 4 + 2] = static_cast<uint8_t>(b + 0.5f);
+            out[x * 4 + 3] = 255;
+        }
+    }
+}
+
+int ChooseBlurRadius(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, const ContentMaskConfig& config) {
+    const int width = config.screenWidth;
+    const int height = config.screenHeight;
+    if (width <= 0 || height <= 0) return kBoxBlurRadius;
+    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, static_cast<size_t>(width) * height);
+
+    // Sample points on a regular grid (clear of the borders, where clamping distorts the blur), grouped
+    // into a coarse grid of tiles. Real content (windows, icons) is *concentrated* in some tiles and
+    // leaves others quiet; a reference that is off at fine scale is off *everywhere*, so even the
+    // quietest tiles show many differing pixels. Hence the statistic: the 25th percentile, over tiles,
+    // of the fraction of sampled pixels whose difference exceeds the pixel threshold.
+    constexpr int kTiles = 16;
+    const int stride = std::max(1, static_cast<int>(std::sqrt(static_cast<double>(width) * height / 20000.0)));
+    constexpr int kRadii[] = {kBoxBlurRadius, 3, 4, 6, 8, 12};
+    constexpr double kMaxQuietTileFraction = 0.10;
+    for (int radius : kRadii) {
+        std::vector<int> total(kTiles * kTiles, 0), over(kTiles * kTiles, 0);
+        for (int y = 16; y < height - 16; y += stride) {
+            for (int x = 16; x < width - 16; x += stride) {
+                float bc[3], bw[3];
+                BlurredPixel(captureRgba, width, height, x, y, radius, false, gain, bc);
+                BlurredPixel(wallpaperRgba, width, height, x, y, radius, true, gain, bw);
+                const int diff = static_cast<int>(std::abs(bc[0] - bw[0]) + std::abs(bc[1] - bw[1]) + std::abs(bc[2] - bw[2]));
+                const size_t tile = static_cast<size_t>(y * kTiles / height) * kTiles + static_cast<size_t>(x * kTiles / width);
+                ++total[tile];
+                if (diff > config.pixelDiffThreshold) ++over[tile];
+            }
+        }
+        std::vector<double> fractions;
+        for (size_t t = 0; t < total.size(); ++t) {
+            if (total[t] >= 4) fractions.push_back(static_cast<double>(over[t]) / total[t]);
+        }
+        if (fractions.empty()) return kBoxBlurRadius;
+        auto nth = fractions.begin() + static_cast<long>(fractions.size() / 4);
+        std::nth_element(fractions.begin(), nth, fractions.end());
+        if (*nth <= kMaxQuietTileFraction || radius == kRadii[sizeof(kRadii) / sizeof(kRadii[0]) - 1]) return radius;
+    }
+    return kBoxBlurRadius;
+}
+
 std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
                                       const ContentMaskConfig& config,
-                                      std::vector<float>* outDifferingFraction) {
+                                      std::vector<float>* outDifferingFraction, int* outBlurRadius) {
     const int n = std::max(1, config.gridN);
     const int width = config.screenWidth;
     const int height = config.screenHeight;
@@ -338,8 +467,10 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
     // different) essentially untouched.
     std::vector<uint8_t> blurredCapture;
     std::vector<uint8_t> blurredWallpaper;
-    BoxBlurRgb(captureRgba, width, height, kBoxBlurRadius, blurredCapture);
-    BoxBlurRgb(gainedWallpaper.data(), width, height, kBoxBlurRadius, blurredWallpaper);
+    const int blurRadius = ChooseBlurRadius(captureRgba, wallpaperRgba, config);
+    if (outBlurRadius) *outBlurRadius = blurRadius;
+    BoxBlurRgb(captureRgba, width, height, blurRadius, blurredCapture);
+    BoxBlurRgb(gainedWallpaper.data(), width, height, blurRadius, blurredWallpaper);
 
     size_t cellIndex = 0;
     for (int row = 0; row < n; ++row) {
@@ -602,6 +733,7 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
 
     const size_t pixelCount = static_cast<size_t>(width) * height;
     const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, pixelCount);
+    const int blurRadius = ChooseBlurRadius(captureRgba, wallpaperRgba, config); // same choice as ComputeContentMask made
     const int leafGrid = 1 << config.boundaryRefineMaxDepth;
     result.leafGrid = leafGrid;
 
@@ -630,7 +762,7 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
             std::vector<bool> leaves(static_cast<size_t>(leafGrid) * leafGrid, false);
             std::vector<bool> forced(leaves.size(), false);
             RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, x1, y0, y1, /*depth=*/0,
-                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, forced, forcedRects);
+                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, forced, forcedRects, blurRadius);
 
             // Noise filter: only evidence groups of connected leaves count (forced leaves always do).
             std::vector<bool> evidence(leaves.size());

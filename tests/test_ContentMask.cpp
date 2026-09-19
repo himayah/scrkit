@@ -1,5 +1,7 @@
 #include "test_framework.h"
 
+#include <algorithm>
+
 #include "../src/core/ContentMask.h"
 
 using core::BoundaryRefinement;
@@ -1093,4 +1095,115 @@ TEST_CASE(FinishContentMask_ReportsStageCountsAndVerdicts) {
     CHECK(stats.afterRects >= stats.raw);
     CHECK(stats.afterStraddle >= stats.raw);
     CHECK(stats.afterStraddle < 32 * 32 / 2); // the window, not the screen
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive blur radius: a wallpaper reference that matches the screen only approximately at fine scale
+// (real-machine bug: 94% of cells flagged on a finely textured photo before any window logic ran).
+
+namespace {
+std::vector<uint8_t> NoiseBuf(int w, int h, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    uint32_t s = seed;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        for (int c = 0; c < 3; ++c) {
+            s = s * 1664525u + 1013904223u;
+            px[i + c] = static_cast<uint8_t>(s >> 24);
+        }
+        px[i + 3] = 255;
+    }
+    return px;
+}
+// Binary high-contrast blobs of `block` px: what a fine photographic texture looks like at pixel scale.
+std::vector<uint8_t> BlobBuf(int w, int h, int block, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    const int bw = (w + block - 1) / block;
+    std::vector<uint8_t> level(static_cast<size_t>(bw) * ((h + block - 1) / block));
+    uint32_t s = seed;
+    for (auto& l : level) {
+        s = s * 1664525u + 1013904223u;
+        l = (s >> 24) & 1 ? 235 : 20;
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            uint8_t* p = &px[(static_cast<size_t>(y) * w + x) * 4];
+            p[0] = p[1] = p[2] = level[static_cast<size_t>(y / block) * bw + x / block];
+            p[3] = 255;
+        }
+    }
+    return px;
+}
+std::vector<uint8_t> ShiftedRight(const std::vector<uint8_t>& src, int w, int h, int dx) {
+    std::vector<uint8_t> out(src.size());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int sx = std::clamp(x - dx, 0, w - 1);
+            std::copy(&src[(static_cast<size_t>(y) * w + sx) * 4], &src[(static_cast<size_t>(y) * w + sx) * 4] + 4,
+                      &out[(static_cast<size_t>(y) * w + x) * 4]);
+        }
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE(ContentMask_AWellMatchedWallpaperKeepsTheOriginalBlurRadius) {
+    const int w = 320, h = 240;
+    const auto wall = NoiseBuf(w, h, 3);
+    ContentMaskConfig cfg;
+    cfg.screenWidth = w;
+    cfg.screenHeight = h;
+    cfg.gridN = 16;
+    int radius = 0;
+    ComputeContentMask(wall.data(), wall.data(), cfg, nullptr, &radius);
+    CHECK_EQ(radius, 2); // identical images: nothing to calibrate, behavior unchanged
+}
+
+TEST_CASE(ContentMask_ATexturedWallpaperOffByOnePixelIsNotReportedAsContent) {
+    // A high-contrast blob texture (4px blobs) as the wallpaper; the "screen" shows it shifted by 1px (as a slightly misaligned or
+    // differently resampled reference would) plus one real content block. With a fixed 5x5 blur nearly every
+    // cell used to be flagged; the blur now widens until the mismatch is invisible.
+    const int w = 640, h = 480;
+    const auto wall = BlobBuf(w, h, 4, 8);
+    auto capture = ShiftedRight(wall, w, h, 1);
+    FillRect(capture, w, 100, 100, 220, 200, 250, 250, 250); // one 120x100 content block
+    ContentMaskConfig cfg;
+    cfg.screenWidth = w;
+    cfg.screenHeight = h;
+    cfg.gridN = 32; // 20x15px cells
+    int radius = 0;
+    const auto mask = ComputeContentMask(capture.data(), wall.data(), cfg, nullptr, &radius);
+    CHECK(radius > 2);
+
+    int flagged = 0, inBlock = 0, blockCells = 0;
+    for (int row = 0; row < 32; ++row) {
+        for (int col = 0; col < 32; ++col) {
+            const int cx = col * w / 32 + 10, cy = row * h / 32 + 7;
+            const bool block = cx >= 100 && cx < 220 && cy >= 100 && cy < 200;
+            const bool on = mask[static_cast<size_t>(row) * 32 + col];
+            flagged += on ? 1 : 0;
+            if (block) {
+                ++blockCells;
+                inBlock += on ? 1 : 0;
+            }
+        }
+    }
+    CHECK(inBlock >= blockCells * 8 / 10);   // the real block is found
+    CHECK(flagged - inBlock < 32 * 32 / 10); // and the noise mismatch is not (under 10% of the screen outside the block)
+}
+
+TEST_CASE(ContentMask_ADesktopMostlyCoveredByWindowsIsNotMistakenForAWallpaperMismatch) {
+    // Matching reference, but ~60% of the screen is covered by opaque windows: content is concentrated,
+    // quiet tiles remain, so the blur must stay at its original radius.
+    const int w = 640, h = 480;
+    const auto wall = BlobBuf(w, h, 4, 15);
+    auto capture = wall;
+    FillRect(capture, w, 0, 0, 400, 300, 245, 245, 245);      // big window (top-left)
+    FillRect(capture, w, 250, 200, 640, 480, 30, 30, 34);     // second window, overlapping
+    ContentMaskConfig cfg;
+    cfg.screenWidth = w;
+    cfg.screenHeight = h;
+    cfg.gridN = 32;
+    int radius = 0;
+    ComputeContentMask(capture.data(), wall.data(), cfg, nullptr, &radius);
+    CHECK_EQ(radius, 2);
 }

@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <vector>
 
-#include "ContentMask.h" // for ResampleRgba, reused for the Stretch case
+#include "ContentMask.h" // for ResampleRgbaSmooth
 
 namespace core {
 
@@ -76,7 +76,7 @@ void CompositeWallpaper(const uint8_t* src, int srcW, int srcH, uint8_t* dst, in
     }
 
     if (mode == WallpaperFitMode::Stretch) {
-        ResampleRgba(src, srcW, srcH, dst, dstW, dstH); // whole-canvas stretch, aspect ignored
+        ResampleRgbaSmooth(src, srcW, srcH, dst, dstW, dstH); // whole-canvas stretch, aspect ignored
         return;
     }
 
@@ -111,15 +111,24 @@ void CompositeWallpaper(const uint8_t* src, int srcW, int srcH, uint8_t* dst, in
 
     FillSolid(dst, dstW, dstH, letterboxR, letterboxG, letterboxB);
 
+    // Scale the whole image once, smoothly (area average down, linear up), exactly as an image is
+    // normally rendered -- picking single source pixels (nearest neighbor) aliases a large, finely
+    // textured wallpaper into noise a real screen doesn't show. Scale 1 (Center) needs no resampling.
+    std::vector<uint8_t> scaledBuf;
+    const uint8_t* scaledPx = src;
+    if (scaledW != srcW || scaledH != srcH) {
+        scaledBuf.resize(static_cast<size_t>(scaledW) * scaledH * 4);
+        ResampleRgbaSmooth(src, srcW, srcH, scaledBuf.data(), scaledW, scaledH);
+        scaledPx = scaledBuf.data();
+    }
+
     const int xStart = std::max(0, offsetX);
     const int xEnd = std::min(dstW, offsetX + scaledW);
     const int yStart = std::max(0, offsetY);
     const int yEnd = std::min(dstH, offsetY + scaledH);
     for (int y = yStart; y < yEnd; ++y) {
-        const int sy = std::min(srcH - 1, static_cast<int>((y - offsetY) / scale));
         for (int x = xStart; x < xEnd; ++x) {
-            const int sx = std::min(srcW - 1, static_cast<int>((x - offsetX) / scale));
-            CopyPixel(src, sx, sy, srcW, dst, (static_cast<size_t>(y) * dstW + x) * 4);
+            CopyPixel(scaledPx, x - offsetX, y - offsetY, scaledW, dst, (static_cast<size_t>(y) * dstW + x) * 4);
         }
     }
 }
@@ -146,7 +155,7 @@ void CompositeWallpaperAligned(const uint8_t* src, int srcW, int srcH, uint8_t* 
     }
 
     std::vector<uint8_t> scaled(static_cast<size_t>(scaledW) * scaledH * 4);
-    ResampleRgba(src, srcW, srcH, scaled.data(), scaledW, scaledH);
+    ResampleRgbaSmooth(src, srcW, srcH, scaled.data(), scaledW, scaledH);
 
     // Valid crop offset range on each axis: offset <= 0 (else the window's
     // left/top edge would read before the scaled image starts) and
@@ -170,6 +179,24 @@ void CompositeWallpaperAligned(const uint8_t* src, int srcW, int srcH, uint8_t* 
                 bestScore = score;
                 bestOffsetX = offsetX;
                 bestOffsetY = offsetY;
+            }
+        }
+    }
+
+    // Refine to the exact pixel: the coarse search moved in steps of kOffsetStep, and on a finely
+    // textured wallpaper even a 1-2px misalignment makes the reference differ from the real screen
+    // almost everywhere.
+    {
+        long long refined = bestScore;
+        const int cx = bestOffsetX, cy = bestOffsetY;
+        for (int oy = std::max(minOffsetY, cy - (kOffsetStep - 1)); oy <= std::min(0, cy + (kOffsetStep - 1)); ++oy) {
+            for (int ox = std::max(minOffsetX, cx - (kOffsetStep - 1)); ox <= std::min(0, cx + (kOffsetStep - 1)); ++ox) {
+                const long long score = ScoreCropOffset(scaled, scaledW, ox, oy, referenceRgba, dstW, dstH);
+                if (score < refined) {
+                    refined = score;
+                    bestOffsetX = ox;
+                    bestOffsetY = oy;
+                }
             }
         }
     }
