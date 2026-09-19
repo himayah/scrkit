@@ -75,6 +75,10 @@ private:
     // shown/hidden, rebuild) repaints everything so no ghost of the old layout survives.
     void Relayout(bool fullRedraw = true);
     void UpdateScrollBar();
+    // Double buffering (WS_EX_COMPOSITED) is only needed once the user can scroll, and it makes
+    // creating/painting hundreds of children slower, so it is off while (re)building the panel
+    // and switched on shortly after the panel has been shown.
+    void SetComposited(bool on);
     void OnCommand(int controlId, int notification, HWND source);
     void OnSlider(HWND slider, bool final);
     void FlushPendingSliders();

@@ -24,6 +24,8 @@ constexpr int kLabelMaxWidth = 150;
 constexpr int kLineHeight = 22;
 constexpr int kIndent = 12;
 constexpr UINT_PTR kSliderTimerId = 1;
+constexpr UINT_PTR kCompositeTimerId = 2;
+constexpr UINT kCompositeDelayMs = 250;
 constexpr int kSliderSteps = 1000;
 constexpr int kComboDropHeight = 220;
 
@@ -138,10 +140,8 @@ bool ControlPanel::Create(HWND parent, HINSTANCE instance) {
     lf.lfWeight = FW_BOLD;
     boldFont_ = CreateFontIndirectW(&lf);
 
-    // WS_EX_COMPOSITED double-buffers the painting of the panel and all its children, so a
-    // scroll step shows each control's finished pixels rather than the half-repainted state
-    // (visible as flicker, worst on the many checkboxes of a flags control).
-    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT | WS_EX_COMPOSITED, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+    // (Double buffering is enabled later, after the first display -- see SetComposited.)
+    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT, kPanelClass, L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                             0, 0, 100, 100, parent, nullptr, instance, this);
     return hwnd_ != nullptr;
 }
@@ -161,7 +161,15 @@ ControlPanel::Row* ControlPanel::RowForControlId(int controlId, int* sub) {
     return &rows_[index];
 }
 
+void ControlPanel::SetComposited(bool on) {
+    const LONG_PTR style = GetWindowLongPtrW(hwnd_, GWL_EXSTYLE);
+    const LONG_PTR wanted = on ? (style | WS_EX_COMPOSITED) : (style & ~static_cast<LONG_PTR>(WS_EX_COMPOSITED));
+    if (wanted != style) SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, wanted);
+}
+
 void ControlPanel::Rebuild(const scrapi::ControlModel* model) {
+    KillTimer(hwnd_, kCompositeTimerId);
+    SetComposited(false);
     KillTimer(hwnd_, kSliderTimerId);
     pendingSliders_.clear();
     for (Row& row : rows_) {
@@ -196,6 +204,7 @@ void ControlPanel::Rebuild(const scrapi::ControlModel* model) {
     ApplyVisibility(/*force=*/true);
     batching_ = false;
     RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    SetTimer(hwnd_, kCompositeTimerId, kCompositeDelayMs, nullptr); // double-buffer once it's on screen
 }
 
 void ControlPanel::CreateRow(const ControlNode& node, int depth) {
@@ -661,6 +670,11 @@ LRESULT ControlPanel::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_TIMER:
             if (wParam == kSliderTimerId) {
                 FlushPendingSliders();
+                return 0;
+            }
+            if (wParam == kCompositeTimerId) {
+                KillTimer(hwnd_, kCompositeTimerId);
+                SetComposited(true);
                 return 0;
             }
             return -1;
