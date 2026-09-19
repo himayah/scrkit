@@ -110,9 +110,18 @@ void CloseSession() {
     g.sessionStarted = false;
 }
 
+// "folder\\file.scr": enough of the path to tell builds apart in the title bar.
+std::wstring ShortPath(const std::wstring& path) {
+    const size_t last = path.find_last_of(L"\\/");
+    if (last == std::wstring::npos) return path;
+    const size_t prev = last == 0 ? std::wstring::npos : path.find_last_of(L"\\/", last - 1);
+    return prev == std::wstring::npos ? path : path.substr(prev + 1);
+}
+
 void OpenSaver(const std::wstring& path) {
     CloseSession();
     g.scrPath = path;
+    SetWindowTextW(g.main, (L"ScrViewer - " + ShortPath(path)).c_str());
 
     const std::wstring pipeName = viewer::MakePipeName();
     g.pipe = std::make_unique<platform::ScrApiPipe>();
@@ -202,9 +211,22 @@ void DrainIncoming() {
     while (g.pipe->PopLine(line)) g.client->OnLine(line);
 }
 
+// The folder ScrViewer.exe lives in: builds are unpacked side by side with their .scr, so this is
+// where the matching screensaver is (the dialog otherwise reopens on whatever folder was used last,
+// which is how an older build's .scr gets opened by mistake).
+std::wstring ExeFolder() {
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    std::wstring s = path;
+    const size_t slash = s.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : s.substr(0, slash);
+}
+
 void ChooseAndOpen() {
     wchar_t file[MAX_PATH] = {};
     OPENFILENAMEW ofn{};
+    const std::wstring startDir = ExeFolder();
+    ofn.lpstrInitialDir = startDir.empty() ? nullptr : startDir.c_str();
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = g.main;
     const wchar_t filter[] = L"Screensavers (*.scr)\0*.scr\0All files\0*.*\0\0";
