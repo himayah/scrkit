@@ -339,9 +339,9 @@ capability があるとき)。セーバーは論理解像度を保ち、ビュ�
 |---|---|
 | 0 スパイク | **S4 完了**(`tests/test_fx_Directive.cpp` の無作為切り替えテスト)。S2 の受け渡し設計は実装済み(実機の動作は未確認)。**S1 (別プロセス子ウィンドウでの GL 描画とリサイズ追従)・S3 (非対応 `.scr` の挙動) は実機確認待ち** |
 | 1 コア | **完了**。`src/scrapi/`(Json/Manifest/ControlModel/Protocol/ServerCore/ClientCore)、`SpiralControls`(マニフェスト生成・バインダ)、`LayerDirective`、`SimulationClock`。Linux 単体テスト 315 件通過 |
-| 2 セーバー側 | **実装済み・CI でコンパイル確認済み**。`/scrapi:<pipe>`、`ScrApiPipe`/`ScrApiHost`、プレビューの論理解像度化(レターボックス)、自動巡回の停止。**実機動作は未確認** |
-| 3 ビュワー骨格 | **実装済み・CI でコンパイル確認済み**。`src/viewer/win32/`(起動・パイプ・標準ウィジェット生成)。**実機動作は未確認** |
-| 4 コンテンツ源 ほか | **未着手**。現状 `/p` は画面キャプチャを行わないため上物層は空(§B.4)。`fg.*` コントロールは値としては効くが、上物が無いので見た目には出ない |
+| 2 セーバー側 | **実装済み・実機確認済み**(接続、エフェクト固定、リサイズ追従)。`/scrapi:<pipe>`、`ScrApiPipe`/`ScrApiHost`、プレビューの論理解像度化、自動巡回の停止 |
+| 3 ビュワー骨格 | **実装済み・実機確認済み**。パネルは Direct2D の自前描画(`docs/DESIGN_VIEWER_UI.md`)。コマンドバー・操作バー・状態バーの新デザイン化は未着手 |
+| 4 コンテンツ源 ほか | **一部実装**。上物の入力源 `content.source`(`sample`=内蔵の合成デスクトップ / `none`)、`mask.overlay`(検出セルと窓矩形の重ね描き)、`scrapi.seed`/`scrapi.restart`、`content.info` を実装(実機確認待ち)。合成デスクトップは本番と同じマスク処理(`core::FinishContentMask`)を通す。**未実装**: `images`/`desktop` の入力源、エフェクト固有パラメータ(FadeOutIn の下限など)、`phase.*` |
 | 5 仕上げ | **未着手**(ノブ、パレットのスウォッチ列、プリセット、マニフェストのリソース埋め込み、DPI 対応) |
 
 ### 設計からの変更点
