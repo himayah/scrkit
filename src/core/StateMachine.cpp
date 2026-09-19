@@ -5,13 +5,13 @@ namespace core {
 bool SaverStateMachine::Advance(const StateMachineInputs& inputs) {
     switch (state_) {
         case SaverState::STATE_CONTENT:
-            if (inputs.allContentConsumed) {
-                state_ = SaverState::STATE_BACKGROUND;
+            if (inputs.blackoutElapsed) {
+                state_ = SaverState::STATE_FADEOUT;
                 return true;
             }
             return false;
-        case SaverState::STATE_BACKGROUND:
-            if (inputs.allParticlesConsumed) {
+        case SaverState::STATE_FADEOUT:
+            if (inputs.fadeOutComplete) {
                 state_ = SaverState::STATE_BLACK;
                 return true;
             }

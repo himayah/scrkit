@@ -37,6 +37,12 @@ void ClearBlack();
 // fade-in overlay) blended with the given alpha.
 void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHeightPx, float alpha);
 
+// Draws one full-screen solid black quad blended with the given alpha (the
+// STATE_FADEOUT overlay: drawn on top of whatever the effect engine just
+// rendered this frame, ramping 0->1 to fade the whole screen to black
+// without disturbing either layer's own animation underneath).
+void DrawFullscreenBlackOverlay(int screenWidthPx, int screenHeightPx, float alpha);
+
 // Draws every particle in one glBegin(GL_QUADS)/glEnd batch, sampling from
 // `texture`. `halfWidthPx`/`halfHeightPx` are the fixed half-width/height of
 // every particle quad (要件.txt §7: 粒子サイズは固定にする) -- kept separate

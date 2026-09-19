@@ -176,7 +176,8 @@ GLuint CreateTextureFromImage(const DecodedImage& image) {
     return UploadRgbaTexture(image.width, image.height, image.rgba.data());
 }
 
-GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN) {
+GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN,
+                                     const core::BoundaryRefinement* refinement) {
     if (image.width <= 0 || image.height <= 0 || gridN <= 0 ||
         image.rgba.size() < static_cast<size_t>(image.width) * image.height * 4 ||
         mask.size() < static_cast<size_t>(gridN) * gridN) {
@@ -196,7 +197,30 @@ GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector
         const int row = core::PixelToGridIndex(y, gridN, image.height);
         for (int x = 0; x < image.width; ++x) {
             const int col = core::PixelToGridIndex(x, gridN, image.width);
-            if (!mask[static_cast<size_t>(row) * gridN + col]) {
+            const int cellIndex = row * gridN + col;
+            bool contentHere = mask[static_cast<size_t>(cellIndex)];
+
+            // A cell RefineBoundaryMask actually subdivided: trace its finer
+            // per-leaf shape instead of the flat whole-cell fill, using the
+            // exact same cell-relative PixelToGridIndex trick (now against
+            // the cell's own pixel span instead of the whole image) so the
+            // leaf boundaries line up precisely, for the same reason the
+            // outer loop uses it against the whole image.
+            if (refinement) {
+                auto it = refinement->cells.find(cellIndex);
+                if (it != refinement->cells.end()) {
+                    const int cellX0 = (col * image.width) / gridN;
+                    const int cellX1 = ((col + 1) * image.width) / gridN;
+                    const int cellY0 = (row * image.height) / gridN;
+                    const int cellY1 = ((row + 1) * image.height) / gridN;
+                    const int leafGrid = refinement->leafGrid;
+                    const int lx = core::PixelToGridIndex(x - cellX0, leafGrid, cellX1 - cellX0);
+                    const int ly = core::PixelToGridIndex(y - cellY0, leafGrid, cellY1 - cellY0);
+                    contentHere = it->second[static_cast<size_t>(ly) * leafGrid + lx];
+                }
+            }
+
+            if (!contentHere) {
                 masked[(static_cast<size_t>(y) * image.width + x) * 4 + 3] = 0;
             }
         }

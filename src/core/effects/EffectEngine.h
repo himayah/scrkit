@@ -42,12 +42,14 @@ public:
         Vec2 suctionCenter{0.0f, 0.0f};
         bool hueShiftReady = true; // wired for real in §16 Step 10; harmless no-op until HueShift exists
     };
-    struct Outputs {
-        bool foregroundConsumed = false;
-        bool backgroundConsumed = false;
-    };
 
-    Outputs Update(const Inputs& in);
+    // Neither layer's completion is observable from outside anymore: both
+    // cycle their own effect pools forever (foreground self-loops back to a
+    // fresh continuous pick the instant it would otherwise reach Consumed --
+    // see UpdateLayer). The top-level phase machine no longer waits on
+    // either layer "finishing"; it advances on its own elapsed-time timer
+    // instead (AppController's randomized blackout timer).
+    void Update(const Inputs& in);
 
     // Call exactly once whenever core::SaverStateMachine::Advance() returns
     // true (i.e. right after the phase actually changed), per §5.1's table.
@@ -79,7 +81,7 @@ private:
         float exitingElapsedSeconds = 0.0f;
     };
 
-    void UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerConfig, const Inputs& in, bool& consumedOut);
+    void UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerConfig, const Inputs& in);
     void SyncCurrentEffectFromTimeline(LayerRuntime& rt, const LayerEffectConfig& layerConfig);
     void AppendDrawBatch(const LayerRuntime& rt);
 

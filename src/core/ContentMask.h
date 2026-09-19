@@ -9,6 +9,7 @@
 // hold up in practice on a real machine.
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace core {
@@ -110,6 +111,14 @@ struct ContentMaskConfig {
     // 93.7% / 29, 10 -> 94.1% / 45, 8 -> 94.4% / 75), diminishing returns for
     // a fast-rising false-positive cost, so 15 is where this stopped.
     float textureFlatnessMargin = 15.0f;
+
+    // Max recursive halving-depth RefineBoundaryMask subdivides a boundary
+    // cell's pixel rectangle to (each level quarters the area: 1/4, 1/16,
+    // 1/64 of the original cell at depths 1-3). 0 disables refinement
+    // entirely. Runs once at startup (AppController::Initialize), not per
+    // frame, so even the default depth of 3 costs at most a few milliseconds
+    // -- see RefineBoundaryMask's own doc comment.
+    int boundaryRefineMaxDepth = 3;
 };
 
 // Returns gridN*gridN bools, in the same row-major cell order as
@@ -263,5 +272,60 @@ void FillMajorityNeighborCells(std::vector<bool>& mask, int gridN);
 // doesn't use.
 void FillBoundaryStraddlingCells(std::vector<bool>& mask, const std::vector<float>& differingFraction, int gridN,
                                   int requiredNeighbors = 2);
+
+// Sparse, finer-than-`mask` classification produced by RefineBoundaryMask
+// for the specific cells it actually subdivided (every other cell keeps
+// today's flat whole-cell behavior). `leafGrid` (a power of 2, 1 <<
+// config.boundaryRefineMaxDepth) is the per-axis leaf resolution every entry
+// in `cells` uses; `cells[cellIndex]` is a row-major leafGrid x leafGrid bool
+// grid covering that coarse cell's own pixel rectangle. Consumed by
+// platform::CreateMaskedTextureFromImage to trace a boundary cell's real
+// pixel-level edge instead of including/excluding it as one flat block.
+struct BoundaryRefinement {
+    int leafGrid = 1;
+    std::unordered_map<int, std::vector<bool>> cells;
+};
+
+// Re-examines every cell of `mask` that borders a differently-flagged
+// neighbor (a "boundary cell"): unconditionally subdivides its pixel
+// rectangle (quartering the area each level, up to
+// config.boundaryRefineMaxDepth levels -- 1/4, 1/16, 1/64 of the original
+// cell at depths 1-3) and re-runs the exact same per-region diff test
+// ComputeContentMask uses on every resulting sub-rectangle, all the way
+// down. Deliberately does NOT stop early just because an intermediate
+// region's own verdict already matches its parent's -- content that's
+// diluted at every intermediate scale but concentrated only at the deepest
+// one (e.g. a window corner clipping a cell narrowly enough that neither the
+// whole cell nor either half of it individually clears
+// cellDifferingFraction) would otherwise never be found. Cost is still
+// bounded to the boundary's length, not the screen's area, since only
+// boundary cells are examined at all (roughly 84 small region evaluations
+// per boundary cell at the default depth of 3).
+//
+// In place: promotes a `false` cell in `mask` to `true` if any leaf of its
+// finest achieved refinement reads as content -- direct pixel evidence for
+// exactly the case FillBoundaryStraddlingCells can only approximate via
+// neighbor counting. Never demotes an already-`true` cell (see design
+// discussion: a coarse cell including a little real background at its edge
+// is harmless -- the background layer underneath already shows the same
+// pixels there -- so refinement only ever adds detected content, never
+// removes it).
+//
+// `captureRgba`/`wallpaperRgba` must be the same buffers (raw, i.e.
+// `wallpaperRgba` NOT yet brightness-gain-corrected) ComputeContentMask was
+// called with to produce `mask` -- the brightness gain is recomputed
+// internally from them (cheap, and keeps this function self-contained
+// rather than threading an extra out-param through ComputeContentMask's
+// signature for this one caller).
+//
+// Call this after FillEnclosedMaskHoles/FillMajorityNeighborCells (which
+// target whole-cell coincidental matches, not a resolution problem
+// subdividing can help with) and before FillBoundaryStraddlingCells (which
+// stays as a last-resort fallback for the rare cell where even the deepest
+// refinement level reads exactly zero diff -- a perfect coincidental
+// pixel-for-pixel match, not something further subdivision can resolve
+// either).
+BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
+                                       std::vector<bool>& mask, const ContentMaskConfig& config);
 
 } // namespace core

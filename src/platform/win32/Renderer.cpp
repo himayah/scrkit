@@ -56,6 +56,17 @@ void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHei
     glDisable(GL_TEXTURE_2D);
 }
 
+void DrawFullscreenBlackOverlay(int screenWidthPx, int screenHeightPx, float alpha) {
+    if (alpha <= 0.0f) return;
+    glColor4f(0.0f, 0.0f, 0.0f, alpha);
+    glBegin(GL_QUADS);
+    glVertex2f(0.0f, 0.0f);
+    glVertex2f(static_cast<float>(screenWidthPx), 0.0f);
+    glVertex2f(static_cast<float>(screenWidthPx), static_cast<float>(screenHeightPx));
+    glVertex2f(0.0f, static_cast<float>(screenHeightPx));
+    glEnd();
+}
+
 void DrawParticlesBatched(GLuint texture, const std::vector<DrawParticle>& particles, float halfWidthPx,
                            float halfHeightPx) {
     if (particles.empty() || texture == 0) return;

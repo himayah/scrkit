@@ -115,43 +115,42 @@ flowchart TB
 ```mermaid
 stateDiagram-v2
     [*] --> STATE_CONTENT
-    STATE_CONTENT --> STATE_BACKGROUND: 全差分ブロック消滅
-    STATE_BACKGROUND --> STATE_BLACK: 全粒子消滅
+    STATE_CONTENT --> STATE_FADEOUT: ランダムな暗転タイマー満了(§9.10)
+    STATE_FADEOUT --> STATE_BLACK: 黒へのフェードアウト完了
     STATE_BLACK --> STATE_FADE: 一定時間経過
     STATE_FADE --> STATE_RESET: alpha=1到達
     STATE_RESET --> STATE_CONTENT: 一定時間経過（無限ループ）
 ```
 
-この5状態の遷移規則自体はエフェクトシステム拡張後も一切変更していない
-(→ DESIGN_EFFECTS.md §2.2, D-1)。拡張後は `STATE_CONTENT`/`STATE_BACKGROUND` の
-「中身」(何が描かれ、どう消えるか)を`core::fx::EffectEngine`が計算するようになった点が
-異なる: 上物・背景はそれぞれ独立したエフェクト状態機械を持ち、下記のらせん吸い込みへ
-入る前に一定時間(既定: 上物ショーケース40秒、背景は要求されるまで)エフェクトを巡回する。
-`Effects.Enabled=0`にすると、この巡回時間が0になり拡張前と同じ挙動になる
-(→ DESIGN_EFFECTS.md §5, §9.4)。以下の各フェーズの説明は`Effects.Enabled=0`時の
-(=拡張前と同じ)経路を記述したものであり、エフェクト巡回中の詳細は
-DESIGN_EFFECTS.md §5〜§6を参照。
+**§9.10 で背景の強制らせん吸い込みを廃止して以降(この節が現行の実装)**、`STATE_CONTENT`と
+`STATE_BACKGROUND`はそれぞれ`STATE_CONTENT`/`STATE_FADEOUT`に置き換わり、意味も変わった。
+上物・背景はそれぞれ独立したエフェクト状態機械(`core::fx::EffectEngine`)を持ち、
+`STATE_CONTENT`の間はどちらも相手の状態と無関係に、自分のエフェクト(継続演出、上物は
+時々終端演出も)を選んでは切り替え続ける「無限巡回」状態になる。`STATE_CONTENT`から
+先へ進む条件は、もう「上物/背景が消え終わったか」ではなく、`AppController`が
+`STATE_CONTENT`に入るたびに引き直すランダムなタイマー(単発エフェクトの目安10倍の間隔、
+毎回揺らぐ)が満了したかどうかだけである。`STATE_FADEOUT`(旧`STATE_BACKGROUND`)は
+両レイヤーのエフェクト進行を止めずに画面全体を黒へフェードアウトさせるだけの固定長の
+区間で、この間も上物・背景は普段どおりエフェクトを回し続ける。詳細は §9.10 を参照。
 
 各フェーズの詳細:
 
-- **STATE_CONTENT**: 背景画像(壁紙)を全画面に描画したうえで、`core::ContentMask`が実画面
-  キャプチャと壁紙の差分から検出した「差分ブロック」(実際のアイコン・タスクバー・開いている
-  ウィンドウなど、壁紙の上に何か描かれている箇所)だけを、`ScreenCapture`のキャプチャ画像を
-  テクスチャにして`SpiralMath`で中心へ吸い込む。差分のなかったセルは最初から描画対象に
-  含まれないため、背景の壁紙がそのまま見え続ける(=「透明化」)。各ブロックは
-  `MakeParamsForRevolutions`で個別に算出したdThetaにより、開始距離に関わらずほぼ3〜5周回
-  してから中心に消える(追加要望対応)。実画面キャプチャが無い場合(プレビュー時・取得失敗時)は
-  差分ブロックが0件になり、このフェーズは実質的に即座にスキップされて`STATE_BACKGROUND`に進む。
-- **STATE_BACKGROUND**: 画面を黒でクリアしてから粒子をバッチ描画するため、吸い込まれた
-  箇所から自然に黒が露出する。STATE_CONTENTと同様、各粒子は`MakeParamsForRevolutions`で
-  個別に算出したdThetaによりほぼ3〜5周回してから中心に消える(追加要望対応: 背景画像側の
-  回転も緩やかにする)。そのベースdThetaに加えて`centerAccelFactor`(既定40)が上乗せされ、
-  中心に近づくほど角速度がさらに増してらせん状に歪む演出も維持している(既存の別の追加要望)。
+- **STATE_CONTENT**: 背景レイヤー(壁紙全体)と上物レイヤー(`core::ContentMask`が実画面
+  キャプチャと壁紙の差分から検出した「差分ブロック」)を、`core::fx::EffectEngine`がそれぞれ
+  独立にエフェクトを回しながら描画する。上物のエフェクトの一つ(VortexSuction)は中心へ
+  らせん吸い込みされて消えるが、完了すると即座に元の位置へ再出現し次のエフェクトへ進む
+  (§9.10) ため、上物が画面から完全にいなくなることはない。実画面キャプチャが無い場合
+  (プレビュー時・取得失敗時)は上物が最初から存在しない扱いになり、背景のエフェクトのみが
+  動作する。
+- **STATE_FADEOUT**: 両レイヤーともエフェクトの進行を止めないまま、画面全体に黒の
+  半透明オーバーレイを2秒かけて重ねてアルファ1まで持っていく(`DrawFullscreenBlackOverlay`)。
+  完全に不透明になったら`STATE_BLACK`へ進む。
 - **STATE_BLACK**: 黒一色を一定時間 (1秒) 保持。
 - **STATE_FADE**: 黒背景の上に背景画像を alpha=0→1 でブレンド。
 - **STATE_RESET**: 背景(壁紙)と差分ブロックを全て元の位置で静止表示し、一定時間 (1.5秒)
-  保持してから `STATE_CONTENT` に戻る。差分ブロックは起動時に検出した同じ位置・同じ内容を
-  再利用するため、要件§4 step6 の「元の位置に再描画」を満たす。
+  保持してから `STATE_CONTENT` に戻る(両レイヤーとも新しいエフェクトから再開)。差分
+  ブロックは起動時に検出した同じ位置・同じ内容を再利用するため、要件§4 step6 の
+  「元の位置に再描画」を満たす。
 
 ## 4. データフロー (1フレーム)
 
@@ -550,3 +549,81 @@ OS/GPUドライバ側の挙動であると推定した。この判定は、ウ�
 `core::BuildDiffOverlayRgba`)は、6つの原因すべての特定・解決後にすべて削除し(9.7/9.8と
 同様)、恒久対応のみを残した。得られた教訓は9.8と同じ: **要約された数値だけでなく実際の
 2枚の画像をピクセル単位で比較する**手法が、複数の独立した原因を確実に切り分ける鍵になった。
+
+### 9.10 背景の強制らせん吸い込みを廃止し、両レイヤーを独立した無限巡回に (ユーザー要望)
+
+v2.0.0までは、上物が消え終わると`STATE_BACKGROUND`に入り、背景レイヤーが強制的に
+`RequestTerminal()`されて`BackgroundSuction`(既存のv1らせん吸い込みをそのまま再利用した
+唯一の背景終端エフェクト)で終わるまで、上物なしで背景だけが表示される区間があった
+(DESIGN_EFFECTS.md §5.1)。ユーザーから、(1)背景が必ずこの決まったらせん吸い込みで終わる
+仕様は不要、(2)背景も上物も、それぞれ用意したエフェクトを独立にランダムな順序で回し続け、
+互いの進行に同期せず常に両方が同時に見えるようにしたい、という要望があり、設計を見直した
+うえで以下のとおり実装した:
+
+- **背景レイヤー**: `core::fx::EffectEngine::OnPhaseEntered`から背景への`RequestTerminal()`
+  呼び出しを削除。背景の状態機械はTerminal(終端)へ一切遷移しなくなり、継続エフェクト11種を
+  常に順送りし続ける(`EffectId::BackgroundSuction`/`SuctionEffect`/
+  `EffectCatalog::BackgroundTerminalCatalog`自体は削除せず、単純に呼ばれなくなっただけ--
+  共有クラス`EffectStateMachine`のTerminal機構自体は上物側(VortexSuction)がまだ使うため)。
+- **上物レイヤー**: 継続演出→終端演出という既存の流れ(§5.3)は維持しつつ、`Consumed`に
+  達した瞬間、上位のフェーズ機械を待たずその場で`Reset()`して次の継続エフェクトから即座に
+  再開するようにした(`EffectEngine::UpdateLayer`)。これにより上物も背景と同様、消えた
+  ままにはならず常に画面上に存在し続ける。
+- **フェーズ機械**: `STATE_CONTENT`→`STATE_BACKGROUND`の遷移条件だった
+  `allContentConsumed`(上物消滅)/`allParticlesConsumed`(背景消滅)を廃止し、
+  `AppController`が`STATE_CONTENT`突入のたびに引き直すランダムなタイマー
+  (`blackoutTimer_`/`blackoutTargetSeconds_`)に置き換えた。基準値は上物・背景それぞれの
+  `defaultMinSeconds`/`defaultMaxSeconds`の中間値を平均し10倍したもので、実行のたびに
+  [0.7, 1.3]倍のランダムな揺らぎを加える(固定間隔にしないための要望)。`STATE_BACKGROUND`は
+  `STATE_FADEOUT`に改名し、両レイヤーのエフェクト進行を止めないまま画面全体を黒い
+  半透明オーバーレイ(`DrawFullscreenBlackOverlay`)でフェードアウトさせるだけの固定長
+  (2秒)の区間になった。`STATE_BLACK`/`STATE_FADE`/`STATE_RESET`の3フェーズは変更していない。
+- **`Effects.Enabled=0`**: 背景がTerminalへ遷移しなくなったため、この設定では背景の継続
+  エフェクトも全て無効化される結果、背景は無地の壁紙のまま静止する(以前のような
+  `BackgroundSuction`へのフォールバックは発生しない)。上物側は従来どおり`VortexSuction`
+  固定にフォールバックし、上記の自己Resetにより繰り返す。ユーザーからv1完全互換に拘る
+  必要はないと明示されたため、この設定はもはや「拡張前とまったく同じ見た目」を再現する
+  ものではない。
+
+コア(`src/core/`)側の変更は`src/core/StateMachine.{h,cpp}`・
+`src/core/effects/EffectEngine.{h,cpp}`のみで、Linux上のユニットテスト
+(`tests/test_StateMachine.cpp`・`tests/test_fx_Engine.cpp`)で新しい挙動を確認済み。
+`AppController`/`Renderer`側の変更はWindows専用のためこのリポジトリのLinux環境では
+ビルド確認できておらず、実機・CI(MSVCビルド)での確認が必要。
+
+### 9.11 境界セルの再帰的サブセル再評価 (ユーザー要望)
+
+9.9で追加した`FillBoundaryStraddlingCells`は、実際のウィンドウ端がグリッドセル境界と
+一致しないことで生じる「本当に半々」の境界セルを、近傍セルの多数決という間接的な弱い
+根拠でしか判定できていなかった。ユーザーから、境界に接するセルは実際にピクセル領域を
+再分割して差分を取り直し、より直接的な根拠で判定してほしいという要望があり、
+`core::RefineBoundaryMask`(`src/core/ContentMask.{h,cpp}`)を追加した。
+
+- 粗いマスク(`FillEnclosedMaskHoles`/`FillMajorityNeighborCells`まで適用済み)のうち、
+  隣接セルと判定が異なる「境界セル」だけを対象に、そのピクセル矩形を2x2ずつ再帰的に
+  細分化(1/4→1/16→1/64、既定で最大3段階、`ContentMaskConfig::boundaryRefineMaxDepth`で
+  調整可能)し、`ComputeContentMask`と全く同じ判定式(色差分率→テクスチャ平坦度の順)を
+  各部分領域に再適用する。
+- **意図的に、途中の階層の判定が親と一致しても再帰を打ち切らない**(全深度まで無条件に
+  細分化する)。実測で確認済みの通り、ウィンドウの角がセルをわずかにかすめるだけのケースは
+  全体はもちろん、どの中間階層で見ても30%の閾値を超えないまま、最深部の1リーフだけが
+  100%content、ということが起こりうるため(`RefineBoundaryMask_RecoversContentVisibleOnlyAtTheDeepestLevel`
+  テストで再現)。
+- 細分化した結果、いずれかのリーフが content と判定されれば元々falseだったセルをtrueへ
+  昇格させる(逆にtrueのセルを再判定してfalseへ降格させることは絶対にしない -- 過剰包含は
+  背景レイヤーが同じピクセルを描いているため無害だが、過小検出は実際に穴として見えてしまう
+  ため、この非対称性は意図的)。
+- 昇格判定とは別に、細分化で得たリーフ単位の詳細な形状は`core::BoundaryRefinement`として
+  `platform::CreateMaskedTextureFromImage`に渡され、境界セルのアルファ境界をセル単位の
+  ブロックではなく実際のピクセル形状に沿わせるのに使われる。**この細分化は上物の
+  クリッピング画像(1枚のRGBA画像)を作る起動時の処理でのみ使われ**、エフェクト系が扱う
+  グリッド解像度(`gridN`、パーティクル/ブロック数)自体は一切変更しない -- 以降のあらゆる
+  エフェクトは、この1枚の画像(透過領域込み)だけを対象に動作する。
+- `ComputeContentMask`は起動時に1回しか呼ばれないため、境界セルだけを対象にした追加の
+  細分化(全セル数よりずっと少ない境界セル×最大84回の小さな追加計算)は毎フレームの負荷には
+  ならない。
+
+`src/core/`側の実装・テスト(`tests/test_ContentMask.cpp`の`RefineBoundaryMask_*`)はLinux上で
+確認済み。`platform::CreateMaskedTextureFromImage`/`AppController::Initialize`側の配線は
+Windows専用のためこのリポジトリのLinux環境ではビルド確認できておらず、実機・CI(MSVCビルド)
+での確認が必要。

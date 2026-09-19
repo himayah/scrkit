@@ -101,6 +101,143 @@ void BoxBlurRgb(const uint8_t* src, int width, int height, int radius, std::vect
     }
 }
 
+// Shared tail of the per-cell decision (ComputeContentMask's inner loop and
+// RefineBoundaryMask's region evaluation both call this): the color-diff
+// fraction check, falling back to the texture-flatness margin check when it
+// doesn't clear the bar on its own. Factored out once so the two never drift
+// apart -- see ContentMask.h's note on core::PixelToGridIndex for why that
+// matters in this codebase specifically.
+bool DecideFlagged(float differingFraction, double captureVar, double wallpaperVar,
+                    const ContentMaskConfig& config) {
+    if (differingFraction >= config.cellDifferingFraction) return true;
+    const double margin = std::sqrt(wallpaperVar) - std::sqrt(captureVar);
+    return margin >= config.textureFlatnessMargin;
+}
+
+// Gain-corrected wallpaper pixel at (x,y), matching ComputeContentMask's
+// `gainedWallpaper` construction exactly (gain applied then clamped, per
+// pixel, before any blurring) -- order matters since clamping is nonlinear.
+inline void GainedWallpaperPixel(const uint8_t* wallpaperRgba, int width, int x, int y, float gain, float out[3]) {
+    const uint8_t* w = wallpaperRgba + (static_cast<size_t>(y) * width + x) * 4;
+    out[0] = std::clamp(w[0] * gain, 0.0f, 255.0f);
+    out[1] = std::clamp(w[1] * gain, 0.0f, 255.0f);
+    out[2] = std::clamp(w[2] * gain, 0.0f, 255.0f);
+}
+
+// On-demand box-blurred value of one pixel, sampling directly from the
+// full-resolution source with edge clamping at the *true* image bounds --
+// matches BoxBlurRgb's own clamping exactly, so a refined sub-region's
+// decision stays consistent with the coarse pass at a shared cell boundary.
+// Used instead of a precomputed full-image blurred buffer because
+// RefineBoundaryMask only ever touches a small fraction of the image (the
+// cells actually on a content/background boundary), so blurring the whole
+// image up front here would be wasted work.
+void BlurredPixel(const uint8_t* rgba, int width, int height, int x, int y, int radius, bool applyGain, float gain,
+                   float out[3]) {
+    float sum[3] = {0.0f, 0.0f, 0.0f};
+    int count = 0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        const int sy = std::clamp(y + dy, 0, height - 1);
+        for (int dx = -radius; dx <= radius; ++dx) {
+            const int sx = std::clamp(x + dx, 0, width - 1);
+            float p[3];
+            if (applyGain) {
+                GainedWallpaperPixel(rgba, width, sx, sy, gain, p);
+            } else {
+                const uint8_t* c = rgba + (static_cast<size_t>(sy) * width + sx) * 4;
+                p[0] = c[0];
+                p[1] = c[1];
+                p[2] = c[2];
+            }
+            sum[0] += p[0];
+            sum[1] += p[1];
+            sum[2] += p[2];
+            ++count;
+        }
+    }
+    out[0] = sum[0] / count;
+    out[1] = sum[1] / count;
+    out[2] = sum[2] / count;
+}
+
+// Same decision ComputeContentMask makes per grid cell, generalized to an
+// arbitrary [x0,x1) x [y0,y1) pixel rectangle (a boundary cell's sub-region
+// during recursive refinement).
+bool EvaluateRegionFlagged(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width, int height,
+                            int x0, int x1, int y0, int y1, float gain, const ContentMaskConfig& config) {
+    long long differing = 0, total = 0;
+    double captureSum = 0.0, captureSumSq = 0.0, wallpaperSum = 0.0, wallpaperSumSq = 0.0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            float bc[3], bw[3];
+            BlurredPixel(captureRgba, width, height, x, y, kBoxBlurRadius, false, gain, bc);
+            BlurredPixel(wallpaperRgba, width, height, x, y, kBoxBlurRadius, true, gain, bw);
+            const int diff = static_cast<int>(std::abs(bc[0] - bw[0]) + std::abs(bc[1] - bw[1]) + std::abs(bc[2] - bw[2]));
+            if (diff > config.pixelDiffThreshold) ++differing;
+            ++total;
+
+            const uint8_t* rc = captureRgba + (static_cast<size_t>(y) * width + x) * 4;
+            float rw[3];
+            GainedWallpaperPixel(wallpaperRgba, width, x, y, gain, rw);
+            for (int ch = 0; ch < 3; ++ch) {
+                captureSum += rc[ch];
+                captureSumSq += static_cast<double>(rc[ch]) * rc[ch];
+                wallpaperSum += rw[ch];
+                wallpaperSumSq += static_cast<double>(rw[ch]) * rw[ch];
+            }
+        }
+    }
+    if (total == 0) return false;
+    const float differingFraction = static_cast<float>(differing) / static_cast<float>(total);
+    const double sampleCount = static_cast<double>(total) * 3.0;
+    const double captureMean = captureSum / sampleCount;
+    const double wallpaperMean = wallpaperSum / sampleCount;
+    const double captureVar = std::max(0.0, captureSumSq / sampleCount - captureMean * captureMean);
+    const double wallpaperVar = std::max(0.0, wallpaperSumSq / sampleCount - wallpaperMean * wallpaperMean);
+    return DecideFlagged(differingFraction, captureVar, wallpaperVar, config);
+}
+
+// Recursively evaluates one quadrant of a boundary cell, unconditionally
+// subdividing every quadrant down to maxDepth (not just the ones that look
+// ambiguous at a coarser scale) -- see RefineBoundaryMask's doc comment for
+// why stopping early on "this quadrant's own verdict already agrees with its
+// parent's" would miss real content that's diluted at every intermediate
+// scale but concentrated only at the deepest one (e.g. a window corner that
+// clips a cell narrowly enough that neither the whole cell nor either
+// half it falls in ever individually clears cellDifferingFraction, even
+// though an actual, real sliver of content is there). Startup-only cost
+// (see ContentMaskConfig::boundaryRefineMaxDepth), so there's no reason to
+// trade that thoroughness away for a cost saving that doesn't matter here.
+void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width, int height, float gain,
+                     const ContentMaskConfig& config, int x0, int x1, int y0, int y1, int depth, int maxDepth,
+                     int leafGrid, int leafX0, int leafY0, int leafSpan, std::vector<bool>& leaves,
+                     bool& anyLeafFlagged) {
+    const bool flagged = EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config);
+    anyLeafFlagged = anyLeafFlagged || flagged;
+
+    const bool canSubdivide = depth < maxDepth && (x1 - x0) >= 2 && (y1 - y0) >= 2;
+    if (!canSubdivide) {
+        for (int ly = leafY0; ly < leafY0 + leafSpan; ++ly) {
+            for (int lx = leafX0; lx < leafX0 + leafSpan; ++lx) {
+                leaves[static_cast<size_t>(ly) * leafGrid + lx] = flagged;
+            }
+        }
+        return;
+    }
+
+    const int xm = (x0 + x1) / 2;
+    const int ym = (y0 + y1) / 2;
+    const int childSpan = leafSpan / 2;
+    RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, y0, ym, depth + 1, maxDepth,
+                   leafGrid, leafX0, leafY0, childSpan, leaves, anyLeafFlagged);
+    RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, y0, ym, depth + 1, maxDepth,
+                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, anyLeafFlagged);
+    RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, ym, y1, depth + 1, maxDepth,
+                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged);
+    RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, ym, y1, depth + 1, maxDepth,
+                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged);
+}
+
 } // namespace
 
 void ResampleRgba(const uint8_t* src, int srcW, int srcH, uint8_t* dst, int dstW, int dstH) {
@@ -200,17 +337,15 @@ std::vector<bool> ComputeContentMask(const uint8_t* captureRgba, const uint8_t* 
             const float differingFraction = total > 0 ? static_cast<float>(differing) / static_cast<float>(total) : 0.0f;
             if (outDifferingFraction) (*outDifferingFraction)[cellIndex] = differingFraction;
 
-            bool flagged = differingFraction >= config.cellDifferingFraction;
-
-            if (!flagged && total > 0) {
+            bool flagged = false;
+            if (total > 0) {
                 const double sampleCount = static_cast<double>(total) * 3.0;
                 const double captureMean = captureSum / sampleCount;
                 const double wallpaperMean = wallpaperSum / sampleCount;
                 const double captureVar = std::max(0.0, captureSumSq / sampleCount - captureMean * captureMean);
                 const double wallpaperVar =
                     std::max(0.0, wallpaperSumSq / sampleCount - wallpaperMean * wallpaperMean);
-                const double margin = std::sqrt(wallpaperVar) - std::sqrt(captureVar);
-                flagged = margin >= config.textureFlatnessMargin;
+                flagged = DecideFlagged(differingFraction, captureVar, wallpaperVar, config);
             }
 
             mask[cellIndex] = flagged;
@@ -318,6 +453,52 @@ void FillBoundaryStraddlingCells(std::vector<bool>& mask, const std::vector<floa
             }
         }
     }
+}
+
+BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
+                                       std::vector<bool>& mask, const ContentMaskConfig& config) {
+    BoundaryRefinement result;
+    const int gridN = config.gridN;
+    const int width = config.screenWidth;
+    const int height = config.screenHeight;
+    if (config.boundaryRefineMaxDepth <= 0 || gridN <= 0 || width <= 0 || height <= 0 ||
+        mask.size() != static_cast<size_t>(gridN) * gridN) {
+        return result;
+    }
+
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    const float gain = ComputeRobustBrightnessGain(captureRgba, wallpaperRgba, pixelCount);
+    const int leafGrid = 1 << config.boundaryRefineMaxDepth;
+    result.leafGrid = leafGrid;
+
+    for (int row = 0; row < gridN; ++row) {
+        const int y0 = (row * height) / gridN;
+        const int y1 = ((row + 1) * height) / gridN;
+        for (int col = 0; col < gridN; ++col) {
+            const size_t cellIndex = static_cast<size_t>(row) * gridN + col;
+            const bool self = mask[cellIndex];
+            bool isBoundary = (row > 0 && mask[cellIndex - static_cast<size_t>(gridN)] != self) ||
+                               (row + 1 < gridN && mask[cellIndex + static_cast<size_t>(gridN)] != self) ||
+                               (col > 0 && mask[cellIndex - 1] != self) ||
+                               (col + 1 < gridN && mask[cellIndex + 1] != self);
+            if (!isBoundary) continue;
+
+            const int x0 = (col * width) / gridN;
+            const int x1 = ((col + 1) * width) / gridN;
+            if (x1 - x0 < 2 || y1 - y0 < 2) continue; // too small to usefully subdivide
+
+            std::vector<bool> leaves(static_cast<size_t>(leafGrid) * leafGrid, self);
+            bool anyLeafFlagged = false;
+            RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, x1, y0, y1, /*depth=*/0,
+                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, anyLeafFlagged);
+
+            // Only ever promote -- see the function's doc comment on why a
+            // cell already `true` is left alone even if every leaf disagrees.
+            if (!self && anyLeafFlagged) mask[cellIndex] = true;
+            result.cells[static_cast<int>(cellIndex)] = std::move(leaves);
+        }
+    }
+    return result;
 }
 
 } // namespace core

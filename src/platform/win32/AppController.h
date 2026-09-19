@@ -78,7 +78,8 @@ private:
     std::unique_ptr<core::Mt19937RandomSource> rng_;
     std::unique_ptr<core::SuctionCenterWalker> center_;
     core::SaverStateMachine stateMachine_;
-    core::FadeController fade_{2.0f}; // 2s black->image fade (要件4 step5)
+    core::FadeController fade_{2.0f};    // 2s black->image fade (要件4 step5)
+    core::FadeController fadeOut_{2.0f}; // 2s whatever's-on-screen->black fade (STATE_FADEOUT)
     std::unique_ptr<core::fx::EffectEngine> effectEngine_;
 
     // §6.2.8/§6.2.8.1: HueShift's pre-generated hue-rotated background
@@ -101,6 +102,23 @@ private:
     static constexpr float kBlackHoldSeconds = 1.0f;
     static constexpr float kResetHoldSeconds = 1.5f;
 
+    // Both layers now cycle their own effects forever, independently --
+    // nothing about their own progress signals when to reset. Instead, a
+    // randomized "blackout" timer (picked fresh each time STATE_CONTENT is
+    // entered) fires the fade-to-black/reset cycle on its own schedule, deaf
+    // to whatever either layer happens to be doing at that moment (by
+    // design: the two layers' effect switches are meant to stay unsynced).
+    float blackoutTimer_ = 0.0f;
+    float blackoutTargetSeconds_ = 0.0f;
+    // Basis for blackoutTargetSeconds_'s random draw: roughly 10x a single
+    // effect's typical duration (the midpoint of fg/bg's own
+    // defaultMinSeconds/defaultMaxSeconds, averaged across both layers),
+    // computed once in Initialize() from config.effects. Each STATE_CONTENT
+    // entry then draws uniformly from [0.7, 1.3] x this, so the interval
+    // itself is never a fixed number (要望どおり).
+    float blackoutBaseSeconds_ = 75.0f;
+
+    void PickNewBlackoutTarget();
     void OnStateEntered(core::SaverState newState);
 
     EffectTextureTable BuildTextureTable() const;

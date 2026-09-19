@@ -2,6 +2,7 @@
 
 #include "../src/core/ContentMask.h"
 
+using core::BoundaryRefinement;
 using core::ComputeContentMask;
 using core::ContentMaskConfig;
 using core::FillBoundaryStraddlingCells;
@@ -9,6 +10,7 @@ using core::FillEnclosedMaskHoles;
 using core::FillMajorityNeighborCells;
 using core::IsContentMaskSuspicious;
 using core::PixelToGridIndex;
+using core::RefineBoundaryMask;
 using core::ResampleRgba;
 
 namespace {
@@ -665,4 +667,140 @@ TEST_CASE(ComputeContentMask_ThenFillEnclosedMaskHoles_RecoversTheCoincidentalCo
     FillEnclosedMaskHoles(mask, gridN);
 
     CHECK(mask[2 * gridN + 2]);
+}
+
+TEST_CASE(RefineBoundaryMask_SkipsCellsWithNoDifferingNeighbor) {
+    // A uniform, all-background grid has no boundary cells at all (no cell
+    // has a differently-flagged neighbor) -- nothing should be examined, so
+    // the result is empty and the mask is untouched.
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    const auto original = mask;
+    auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+
+    CHECK(refinement.cells.empty());
+    CHECK(mask == original);
+}
+
+TEST_CASE(RefineBoundaryMask_ZeroMaxDepthIsANoop) {
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0); // cell(0,0) fully content -> cell(0,1) is a boundary cell
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    config.boundaryRefineMaxDepth = 0;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    const auto original = mask;
+    auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+
+    CHECK(refinement.cells.empty());
+    CHECK(mask == original);
+}
+
+TEST_CASE(RefineBoundaryMask_RecoversContentConcentratedInOneQuadrant) {
+    // 2x2 grid, 80x80px cells. cell(0,0) is fully black content -> makes
+    // cell(0,1) a boundary cell. Within cell(0,1) (otherwise plain
+    // wallpaper-matching white), a 20px-wide strip along its full left edge
+    // is real content: 1600/6400 = 25% of the whole cell (under the 30%
+    // cellDifferingFraction), so the coarse pass alone must miss it -- but
+    // that same strip covers half the area of each of the two depth-1
+    // quadrants it passes through (800/1600 = 50% each), which clears the
+    // 30% bar comfortably at the quadrant level.
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);   // cell(0,0): fully content
+    FillRect(capture, width, 80, 0, 100, 80, 0, 0, 0); // cell(0,1): left 20px-wide strip only
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(mask[0]);       // cell(0,0)
+    CHECK(!mask[1]);      // cell(0,1): coarse pass misses the diluted strip
+
+    auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    CHECK(mask[1]); // recovered by refinement
+    CHECK(refinement.cells.count(1) == 1);
+}
+
+TEST_CASE(RefineBoundaryMask_RecoversContentVisibleOnlyAtTheDeepestLevel) {
+    // Same boundary setup, but the real content this time is a single
+    // 10x10px patch (one leaf at the default depth-3 resolution, 80/8=10px
+    // per leaf) tucked in cell(0,1)'s far corner. Its coverage reads under
+    // 30% at *every* coarser level on the way down (whole cell: 100/6400 =
+    // 1.6%; its depth-1 quadrant: 100/1600 = 6.25%; its depth-2 sub-quadrant:
+    // 100/400 = 25%) and only clears the bar at the leaf itself (100/100 =
+    // 100%) -- proving refinement doesn't stop just because an intermediate
+    // level's own verdict already happens to agree with a coarser one.
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);       // cell(0,0): fully content
+    FillRect(capture, width, 150, 0, 160, 10, 0, 0, 0);    // cell(0,1): one far-corner 10x10 leaf
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(!mask[1]); // coarse pass misses the tiny, deeply-diluted patch
+
+    auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    CHECK(mask[1]); // recovered anyway -- full-depth recursion, not adaptive early-stopping
+}
+
+TEST_CASE(RefineBoundaryMask_NeverDemotesAnAlreadyFlaggedCell) {
+    // cell(0,1) is forced true in the mask despite its actual pixels being
+    // plain, unremarkable background (every leaf would read "not content" if
+    // re-evaluated) -- refinement must leave it true regardless, since it
+    // only ever adds detected content (see the function's own doc comment on
+    // why: an over-included cell is harmless, the background layer shows the
+    // same pixels underneath anyway).
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0); // cell(0,0): real content, makes cell(0,1) a boundary cell
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(!mask[1]);
+    mask[1] = true; // force it, as if some earlier pass had already promoted it
+
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    CHECK(mask[1]);
+}
+
+TEST_CASE(RefineBoundaryMask_LeafGridMatchesConfiguredDepth) {
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    config.boundaryRefineMaxDepth = 2; // 1/16, not the default 1/64
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+
+    CHECK_EQ(refinement.leafGrid, 4); // 1 << 2
+    CHECK(refinement.cells.count(1) == 1);
+    CHECK_EQ(refinement.cells.at(1).size(), static_cast<size_t>(4 * 4));
 }

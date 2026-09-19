@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include "../../core/ContentMask.h"
 #include "GLCompat.h"
 
 namespace platform {
@@ -43,8 +44,21 @@ GLuint CreateTextureFromImage(const DecodedImage& image);
 // (NOT a fixed image.width/gridN cell width, which drifts from the mask's
 // actual boundaries whenever width isn't an exact multiple of gridN -- see
 // the .cpp), so the alpha edge lines up with each Particle's own u0..v1
-// rect (§7.4). Returns 0 on failure.
-GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN);
+// rect (§7.4).
+//
+// `refinement`, when non-null, is consulted for any pixel that falls inside
+// a cell core::RefineBoundaryMask actually subdivided: that cell's alpha
+// then traces the finer per-leaf shape instead of the flat whole-cell fill,
+// following a boundary cell's real pixel-level edge instead of a blocky
+// one. Every other cell (not present in `refinement`) keeps today's flat
+// behavior unchanged. This is the only place the finer boundary resolution
+// is ever consulted -- the resulting texture is a single flat RGBA image
+// from here on; nothing downstream (the effect system's gridN x gridN
+// block grid) is aware refinement happened at all.
+//
+// Returns 0 on failure.
+GLuint CreateMaskedTextureFromImage(const DecodedImage& image, const std::vector<bool>& mask, int gridN,
+                                     const core::BoundaryRefinement* refinement = nullptr);
 
 // Uploads a raw RGBA8 buffer directly (§6.2.8's HueRing textures). Same GL
 // texture parameters as CreateTextureFromImage. Returns 0 on failure.

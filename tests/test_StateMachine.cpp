@@ -22,15 +22,15 @@ TEST_CASE(StateMachine_FollowsFullRequiredOrder) {
     SaverStateMachine sm;
     StateMachineInputs inputs;
 
-    inputs.allContentConsumed = true;
+    inputs.blackoutElapsed = true;
     CHECK(sm.Advance(inputs));
-    CHECK(sm.Current() == SaverState::STATE_BACKGROUND);
-    inputs.allContentConsumed = false;
+    CHECK(sm.Current() == SaverState::STATE_FADEOUT);
+    inputs.blackoutElapsed = false;
 
-    inputs.allParticlesConsumed = true;
+    inputs.fadeOutComplete = true;
     CHECK(sm.Advance(inputs));
     CHECK(sm.Current() == SaverState::STATE_BLACK);
-    inputs.allParticlesConsumed = false;
+    inputs.fadeOutComplete = false;
 
     inputs.blackHoldElapsed = true;
     CHECK(sm.Advance(inputs));

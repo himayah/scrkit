@@ -59,9 +59,9 @@ TEST_CASE(Engine_DisabledForegroundStartsVortexSuctionImmediately) {
     CHECK(!list.batches[1].quads->empty());
 }
 
-TEST_CASE(Engine_DisabledBackgroundStaysAtRestUntilRequestTerminal) {
+TEST_CASE(Engine_DisabledBackgroundStaysAtRestSinceNoContinuousCandidateExists) {
     EngineConfig config = MakeDefaultEngineConfig();
-    config.enabled = false;
+    config.enabled = false; // no candidates at all (fg falls back to VortexSuction; bg has none to fall back to)
     Mt19937RandomSource rng(1234);
     EffectEngine engine(config, rng);
     engine.SetLayers(MakeLayerSource(LayerKind::Foreground), MakeLayerSource(LayerKind::Background));
@@ -72,42 +72,54 @@ TEST_CASE(Engine_DisabledBackgroundStaysAtRestUntilRequestTerminal) {
     for (int i = 0; i < 10; ++i) engine.Update(in);
 
     // Background: Idle (renders like Rest -- plain rest mesh, no fragments)
-    // until the phase machine requests its terminal.
+    // and stays that way -- background never has a terminal to fall back to
+    // anymore, so with every continuous effect disabled it just sits still.
     const auto& list = engine.DrawList();
     CHECK_EQ(list.batches.size(), static_cast<size_t>(2));
     CHECK(list.batches[0].mesh != nullptr); // background's rest mesh batch
     CHECK(list.batches[0].quads == nullptr);
 
-    engine.OnPhaseEntered(SaverState::STATE_BACKGROUND);
+    // STATE_FADEOUT no longer forces anything -- background stays exactly as
+    // it was (still Idle, still no fragments).
+    engine.OnPhaseEntered(SaverState::STATE_FADEOUT);
     engine.Update(in);
     const auto& list2 = engine.DrawList();
-    CHECK(list2.batches[0].quads != nullptr); // now BackgroundSuction fragments
+    CHECK(list2.batches[0].quads == nullptr);
 }
 
-TEST_CASE(Engine_ConsumedFlagsOnlySetWhenLayerActuallyConsumed) {
+TEST_CASE(Engine_ForegroundNeverStaysConsumedItSelfLoops) {
     EngineConfig config = MakeDefaultEngineConfig();
-    config.enabled = false;
-    config.terminalMaxSeconds = 1.0f; // small enough to reach Consumed within the test loop
+    config.enabled = false; // v1-reproduction path: forces VortexSuction every cycle (§9.4)
+    config.terminalMaxSeconds = 3.0f; // bounds each cycle's worst case; real convergence is faster
     Mt19937RandomSource rng(1234);
     EffectEngine engine(config, rng);
-    // A tiny 1x1 grid so VortexSuction's single fragment reaches the center
-    // (and IsFinished()) quickly.
-    engine.SetLayers(MakeLayerSource(LayerKind::Foreground, 1), MakeLayerSource(LayerKind::Background, 1));
+    // Default 8x8 grid: cells start away from the suction center, so quads
+    // stay visible for several frames each cycle instead of the degenerate
+    // (near-)zero-distance case a 1x1 grid centered on suctionCenter would be.
+    engine.SetLayers(MakeLayerSource(LayerKind::Foreground), MakeLayerSource(LayerKind::Background));
     engine.OnPhaseEntered(SaverState::STATE_CONTENT);
 
     EffectEngine::Inputs in;
     in.dt = 1.0f / 60.0f;
     in.suctionCenter = {960.0f, 540.0f};
-    bool everForegroundConsumed = false;
-    for (int i = 0; i < 600; ++i) {
-        auto out = engine.Update(in);
-        CHECK(!out.backgroundConsumed); // background never ran (still Idle), must never claim consumed
-        if (out.foregroundConsumed) {
-            everForegroundConsumed = true;
-            break;
-        }
+    // Foreground content should never sit empty for more than an instant:
+    // every time its VortexSuction fragment finishes, it must immediately
+    // reappear and start sucking in again -- across many full cycles, the
+    // foreground batch's quads must repeatedly appear, disappear, and
+    // reappear rather than staying gone after the first completion.
+    bool everSawForegroundQuads = false;
+    int cyclesCompleted = 0;
+    bool hadQuadsLastFrame = false;
+    for (int i = 0; i < 3000 && cyclesCompleted < 3; ++i) {
+        engine.Update(in);
+        const auto& list = engine.DrawList();
+        const bool hasQuadsNow = list.batches.size() > 1 && list.batches[1].quads && !list.batches[1].quads->empty();
+        if (hasQuadsNow) everSawForegroundQuads = true;
+        if (hadQuadsLastFrame && !hasQuadsNow) ++cyclesCompleted; // fragment finished once -> should reappear
+        hadQuadsLastFrame = hasQuadsNow;
     }
-    CHECK(everForegroundConsumed);
+    CHECK(everSawForegroundQuads);
+    CHECK_EQ(cyclesCompleted, 3); // reached the loop bound via completions, not the frame-count cap
 }
 
 TEST_CASE(Engine_PhaseEnteredResetTransitionsBothLayersToRest) {

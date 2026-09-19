@@ -152,14 +152,31 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     // it, sitting one cell away from a large background region that's
     // still connected onward to the grid edge (see
     // FillMajorityNeighborCells's doc comment).
-    // Finally, smooth the row-by-row wobble along a real window's own
-    // straight edge -- it essentially never lands exactly on a grid cell
-    // boundary, so the one cell it cuts through is a genuine, ambiguous mix
-    // of window and background pixels that none of the above can resolve
-    // on their own (see FillBoundaryStraddlingCells's doc comment).
+    // Then recursively re-examine every boundary cell at up to 1/64 its
+    // original resolution -- a real, direct measurement of exactly the
+    // window-edge straddling case the coarse per-cell diff structurally
+    // can't resolve on its own (see RefineBoundaryMask's doc comment). Also
+    // captures the finer per-pixel shape CreateMaskedTextureFromImage traces
+    // for those specific cells below, instead of a flat whole-cell fill.
+    // Finally, smooth whatever's left with the neighbor-count heuristic --
+    // a last-resort fallback for the rare cell where even the deepest
+    // refinement level still reads exactly zero diff (a perfect
+    // coincidental pixel-for-pixel match), which no amount of further
+    // subdivision can resolve either (see FillBoundaryStraddlingCells's doc
+    // comment).
+    core::BoundaryRefinement boundaryRefinement;
     if (haveMatchingCapture) {
         core::FillEnclosedMaskHoles(attempt.mask, gridN_);
         core::FillMajorityNeighborCells(attempt.mask, gridN_);
+
+        core::ContentMaskConfig maskConfig;
+        maskConfig.screenWidth = screenWidth_;
+        maskConfig.screenHeight = screenHeight_;
+        maskConfig.gridN = gridN_;
+        boundaryRefinement = core::RefineBoundaryMask(desktopCapture->rgba.data(),
+                                                        attempt.compositedWallpaper.rgba.data(), attempt.mask,
+                                                        maskConfig);
+
         core::FillBoundaryStraddlingCells(attempt.mask, attempt.differingFraction, gridN_);
     }
 
@@ -205,8 +222,10 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 
         // §7.4: the foreground texture is the capture itself with every
         // non-diff cell's alpha zeroed, not a separate "capture texture" the
-        // renderer has to know how to mask at draw time (D-3).
-        foregroundTexture_ = CreateMaskedTextureFromImage(*desktopCapture, mask, gridN_);
+        // renderer has to know how to mask at draw time (D-3). Boundary
+        // cells RefineBoundaryMask actually subdivided get their finer
+        // per-pixel shape traced here instead of a flat whole-cell fill.
+        foregroundTexture_ = CreateMaskedTextureFromImage(*desktopCapture, mask, gridN_, &boundaryRefinement);
         if (foregroundTexture_ == 0) {
             core::Logger::Warn("AppController: failed to create foreground texture; content phase will be skipped");
         }
@@ -268,10 +287,18 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     effectEngine_ = std::make_unique<core::fx::EffectEngine>(config.effects, *rng_);
     effectEngine_->SetLayers(std::move(foregroundLayer), std::move(backgroundLayer));
 
+    // Blackout-timer basis: ~10x a single effect's typical duration,
+    // averaged across both layers (they don't otherwise share a duration
+    // range) -- see the field's own doc comment in AppController.h.
+    const float fgMid = (config.effects.foreground.defaultMinSeconds + config.effects.foreground.defaultMaxSeconds) * 0.5f;
+    const float bgMid = (config.effects.background.defaultMinSeconds + config.effects.background.defaultMaxSeconds) * 0.5f;
+    blackoutBaseSeconds_ = std::max(1.0f, (fgMid + bgMid) * 0.5f * 10.0f);
+
     stateMachine_ = core::SaverStateMachine(core::SaverState::STATE_CONTENT);
     blackHoldTimer_ = resetHoldTimer_ = 0.0f;
     fade_.Reset();
-    OnStateEntered(core::SaverState::STATE_CONTENT); // kick off both layers' effect state machines
+    fadeOut_.Reset();
+    OnStateEntered(core::SaverState::STATE_CONTENT); // kick off both layers' effect SMs + blackout timer
 
     core::Logger::Info("AppController: initialized (" + std::to_string(resolvedParticleCount_) +
                         " particles, " + std::to_string(contentParticles_.size()) + " content cell(s))");
@@ -301,9 +328,23 @@ void AppController::Shutdown() {
     }
 }
 
+void AppController::PickNewBlackoutTarget() {
+    // Uniform in [0.7, 1.3] x the base -- "roughly 10x an effect's length",
+    // never the same fixed number twice (要望: 固定値にしない).
+    const float jitter = 0.7f + (rng_ ? rng_->NextFloat01() : 0.5f) * 0.6f;
+    blackoutTargetSeconds_ = blackoutBaseSeconds_ * jitter;
+    blackoutTimer_ = 0.0f;
+}
+
 void AppController::OnStateEntered(core::SaverState newState) {
     if (effectEngine_) effectEngine_->OnPhaseEntered(newState);
     switch (newState) {
+        case core::SaverState::STATE_CONTENT:
+            PickNewBlackoutTarget();
+            break;
+        case core::SaverState::STATE_FADEOUT:
+            fadeOut_.Reset();
+            break;
         case core::SaverState::STATE_BLACK:
             blackHoldTimer_ = 0.0f;
             break;
@@ -312,8 +353,6 @@ void AppController::OnStateEntered(core::SaverState newState) {
             break;
         case core::SaverState::STATE_RESET:
             resetHoldTimer_ = 0.0f;
-            break;
-        default:
             break;
     }
 }
@@ -344,15 +383,16 @@ void AppController::Update(float dtSeconds) {
     fxIn.dt = dtSeconds;
     fxIn.suctionCenter = {centerPos.x, centerPos.y};
     fxIn.hueShiftReady = hueRingBuilder_ && !hueRingBuilder_->IsRunning();
-    const core::fx::EffectEngine::Outputs fxOut = effectEngine_->Update(fxIn);
+    effectEngine_->Update(fxIn);
 
     core::StateMachineInputs inputs;
     switch (stateMachine_.Current()) {
         case core::SaverState::STATE_CONTENT:
-            inputs.allContentConsumed = fxOut.foregroundConsumed;
+            blackoutTimer_ += dtSeconds;
+            inputs.blackoutElapsed = blackoutTimer_ >= blackoutTargetSeconds_;
             break;
-        case core::SaverState::STATE_BACKGROUND:
-            inputs.allParticlesConsumed = fxOut.backgroundConsumed;
+        case core::SaverState::STATE_FADEOUT:
+            inputs.fadeOutComplete = fadeOut_.Step(dtSeconds) >= 1.0f;
             break;
         case core::SaverState::STATE_BLACK:
             blackHoldTimer_ += dtSeconds;
@@ -384,10 +424,17 @@ EffectTextureTable AppController::BuildTextureTable() const {
 void AppController::Draw() const {
     switch (stateMachine_.Current()) {
         case core::SaverState::STATE_CONTENT:
-        case core::SaverState::STATE_BACKGROUND:
         case core::SaverState::STATE_RESET:
             ClearBlack();
             if (effectEngine_) ExecuteDrawList(effectEngine_->DrawList(), BuildTextureTable());
+            break;
+        case core::SaverState::STATE_FADEOUT:
+            // Both layers keep animating normally underneath; only the black
+            // overlay's alpha ramps up on top of them (§design: fade out
+            // without disturbing either layer's progress).
+            ClearBlack();
+            if (effectEngine_) ExecuteDrawList(effectEngine_->DrawList(), BuildTextureTable());
+            DrawFullscreenBlackOverlay(screenWidth_, screenHeight_, fadeOut_.Alpha());
             break;
         case core::SaverState::STATE_BLACK:
             ClearBlack();

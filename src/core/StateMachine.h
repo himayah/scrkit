@@ -8,9 +8,19 @@ namespace core {
 // individual rectangles, but as a single set of "content" grid cells
 // (wherever the real-desktop capture differs from the plain wallpaper --
 // see core::ContentMask) sucked in together.
+//
+// Both the foreground (content) and background layers now cycle their own
+// effect pools forever, independently, for the whole of STATE_CONTENT --
+// neither layer "finishes" on its own anymore. What used to be
+// STATE_BACKGROUND (background alone, forced to finish via a dedicated
+// suction effect once content was gone) is now STATE_FADEOUT: a fixed-length
+// beat where both layers keep animating, undisturbed, while the screen fades
+// to black on top of them. Entry into STATE_FADEOUT is driven purely by an
+// elapsed-time trigger (AppController's randomized "blackout" timer), not by
+// either layer completing anything.
 enum class SaverState {
     STATE_CONTENT,
-    STATE_BACKGROUND,
+    STATE_FADEOUT,
     STATE_BLACK,
     STATE_FADE,
     STATE_RESET,
@@ -19,8 +29,8 @@ enum class SaverState {
 // Inputs the state machine needs to decide whether to advance. Each flag
 // means "the current phase's work is finished".
 struct StateMachineInputs {
-    bool allContentConsumed = false;
-    bool allParticlesConsumed = false;
+    bool blackoutElapsed = false; // STATE_CONTENT: the randomized blackout timer fired
+    bool fadeOutComplete = false; // STATE_FADEOUT: the fade-to-black overlay reached full black
     bool blackHoldElapsed = false;
     bool fadeComplete = false;
     bool resetHoldElapsed = false;
@@ -34,8 +44,7 @@ public:
 
     // Advances the state machine by one logical step if the inputs indicate
     // the current phase is done. Returns true if the state changed.
-    // 要件.txt §4 の順序 (アイコン+ウィンドウ吸い込みはCONTENTに統合): CONTENT ->
-    // BACKGROUND -> BLACK -> FADE -> RESET -> CONTENT (無限ループ)。
+    // CONTENT -> FADEOUT -> BLACK -> FADE -> RESET -> CONTENT (無限ループ)。
     bool Advance(const StateMachineInputs& inputs);
 
 private:

@@ -34,8 +34,7 @@ void EffectEngine::SetLayers(LayerSource foreground, LayerSource background) {
     bg_.layer = std::move(background);
 }
 
-void EffectEngine::UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerConfig, const Inputs& in,
-                                bool& consumedOut) {
+void EffectEngine::UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerConfig, const Inputs& in) {
     FxInputs fxIn;
     fxIn.dt = in.dt;
     fxIn.hueShiftReady = in.hueShiftReady;
@@ -74,10 +73,20 @@ void EffectEngine::UpdateLayer(LayerRuntime& rt, const LayerEffectConfig& layerC
         rt.current->Step(frame);
     }
 
-    consumedOut = (state == FxState::Consumed);
-    if (consumedOut) {
+    if (state == FxState::Consumed) {
         rt.current.reset();
         rt.hasAppliedEntry = false;
+        // Foreground never stays Consumed: the moment its current terminal
+        // effect (or an empty-layer wait) finishes, it reappears and picks a
+        // fresh continuous effect immediately, so content is perpetually
+        // cycling just like the background layer already does (Reset()'s own
+        // Continuous-first policy handles that half; this closes the loop for
+        // the Terminal/Empty half, which otherwise has no path back to
+        // Entering on its own). A genuinely empty layer (no real desktop
+        // content) is left alone -- there's nothing to reappear.
+        if (rt.layer.kind == LayerKind::Foreground && !rt.layer.empty) {
+            rt.sm->Reset(rt.layer.emptyReason);
+        }
     }
 }
 
@@ -237,16 +246,13 @@ void EffectEngine::AppendDrawBatch(const LayerRuntime& rt) {
     }
 }
 
-EffectEngine::Outputs EffectEngine::Update(const Inputs& in) {
-    Outputs out;
+void EffectEngine::Update(const Inputs& in) {
     drawList_.Clear();
 
-    UpdateLayer(bg_, config_.background, in, out.backgroundConsumed);
+    UpdateLayer(bg_, config_.background, in);
     AppendDrawBatch(bg_);
-    UpdateLayer(fg_, config_.foreground, in, out.foregroundConsumed);
+    UpdateLayer(fg_, config_.foreground, in);
     AppendDrawBatch(fg_); // foreground drawn after background (§4.6)
-
-    return out;
 }
 
 void EffectEngine::OnPhaseEntered(core::SaverState phase) {
@@ -258,12 +264,10 @@ void EffectEngine::OnPhaseEntered(core::SaverState phase) {
             fgSM_.Reset(fg_.layer.emptyReason);
             bgSM_.Reset(EmptyReason::NotEmpty);
             break;
-        case SaverState::STATE_BACKGROUND:
-            bgSM_.RequestTerminal();
-            if (bgSM_.Current() == FxState::Exiting) {
-                bg_.exitingElapsedSeconds = 0.0f; // synchronous transition, not seen by UpdateLayer's before/after check
-                if (bg_.current) bg_.current->RequestExit(config_.transitionSeconds);
-            }
+        case SaverState::STATE_FADEOUT:
+            // Both layers keep animating, undisturbed, while AppController
+            // fades the whole screen to black on top of them -- nothing to do
+            // here (§ design: no forced termination anymore).
             break;
         case SaverState::STATE_BLACK:
         case SaverState::STATE_FADE:
