@@ -9,9 +9,12 @@ using core::FillBoundaryStraddlingCells;
 using core::FillEnclosedMaskHoles;
 using core::FillMajorityNeighborCells;
 using core::IsContentMaskSuspicious;
+using core::ForceRectsIntoMask;
+using core::PixelRect;
 using core::PixelToGridIndex;
 using core::RefineBoundaryMask;
 using core::ResampleRgba;
+using core::SelectEvidencedRects;
 
 namespace {
 std::vector<uint8_t> SolidBuffer(int width, int height, uint8_t r, uint8_t g, uint8_t b) {
@@ -803,4 +806,129 @@ TEST_CASE(RefineBoundaryMask_LeafGridMatchesConfiguredDepth) {
     CHECK_EQ(refinement.leafGrid, 4); // 1 << 2
     CHECK(refinement.cells.count(1) == 1);
     CHECK_EQ(refinement.cells.at(1).size(), static_cast<size_t>(4 * 4));
+}
+
+// ---------------------------------------------------------------------------
+// OS window rectangles (SelectEvidencedRects / ForceRectsIntoMask /
+// RefineBoundaryMask(forcedRects)) -- the fix for a real window's body being
+// eaten by transparency where it happens to match the wallpaper behind it.
+// ---------------------------------------------------------------------------
+
+namespace {
+// 160x160 white wallpaper and an identical white capture except for a little
+// black "text" in a real 100x60 window whose body is otherwise the same
+// white as the wallpaper -- the white-window-on-white-wallpaper failure.
+struct WhiteWindowScene {
+    static constexpr int width = 160, height = 160, gridN = 16; // 10px cells
+    std::vector<uint8_t> wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    std::vector<uint8_t> capture = SolidBuffer(width, height, 255, 255, 255);
+    PixelRect window{20, 30, 120, 90};
+    ContentMaskConfig config;
+    WhiteWindowScene() {
+        // Title text at the window's top-left and a control at its
+        // bottom-left; the right part of the body, and everything between,
+        // is plain white just like the wallpaper.
+        FillRect(capture, width, 20, 30, 50, 40, 0, 0, 0);
+        FillRect(capture, width, 20, 80, 40, 90, 0, 0, 0);
+        config.screenWidth = width;
+        config.screenHeight = height;
+        config.gridN = gridN;
+    }
+    size_t Cell(int row, int col) const { return static_cast<size_t>(row) * gridN + col; }
+};
+} // namespace
+
+TEST_CASE(WindowRects_PixelDiffAloneLeavesTheWhiteWindowBodyTransparent) {
+    WhiteWindowScene scene;
+    auto mask = ComputeContentMask(scene.capture.data(), scene.wallpaper.data(), scene.config);
+    // Sanity check of the premise: a cell deep in the window's right half
+    // (row 5, col 9 -> x 90-100, y 50-60) reads as plain wallpaper.
+    CHECK(!mask[scene.Cell(5, 9)]);
+    // ...and neither hole filling can reach it: it's open to the outside on the right.
+    FillEnclosedMaskHoles(mask, scene.gridN);
+    FillMajorityNeighborCells(mask, scene.gridN);
+    CHECK(!mask[scene.Cell(5, 9)]);
+}
+
+TEST_CASE(WindowRects_ForcingTheRectangleFillsTheWholeWindowInterior) {
+    WhiteWindowScene scene;
+    auto mask = ComputeContentMask(scene.capture.data(), scene.wallpaper.data(), scene.config);
+    auto rects = SelectEvidencedRects(mask, {scene.window}, scene.config);
+    CHECK_EQ(rects.size(), static_cast<size_t>(1));
+    ForceRectsIntoMask(mask, rects, scene.config);
+
+    // Every cell of the window interior (rows 3-8, cols 2-11) is content...
+    for (int row = 3; row <= 8; ++row) {
+        for (int col = 2; col <= 11; ++col) CHECK(mask[scene.Cell(row, col)]);
+    }
+    // ...and cells well outside it are not.
+    CHECK(!mask[scene.Cell(0, 0)]);
+    CHECK(!mask[scene.Cell(5, 13)]);
+    CHECK(!mask[scene.Cell(12, 5)]);
+}
+
+TEST_CASE(WindowRects_RectWithoutPixelEvidenceIsRejected) {
+    // A window that claims to be on screen but whose pixels are identical to
+    // the wallpaper everywhere (a transparent overlay, an invisible helper
+    // window) must not turn plain wallpaper into content.
+    WhiteWindowScene scene;
+    auto mask = ComputeContentMask(scene.capture.data(), scene.wallpaper.data(), scene.config);
+    const PixelRect ghost{100, 100, 150, 150}; // nothing but white capture/wallpaper in there
+    auto rects = SelectEvidencedRects(mask, {scene.window, ghost}, scene.config);
+    CHECK_EQ(rects.size(), static_cast<size_t>(1));
+    CHECK_EQ(rects[0].left, scene.window.left);
+}
+
+TEST_CASE(WindowRects_RectsAreClippedToTheScreenAndOffScreenOnesDropped) {
+    WhiteWindowScene scene;
+    auto mask = ComputeContentMask(scene.capture.data(), scene.wallpaper.data(), scene.config);
+    const PixelRect hangsOffLeft{-30, 30, 120, 90}; // same window, extended past the left edge
+    const PixelRect entirelyOffScreen{200, 200, 300, 300};
+    auto rects = SelectEvidencedRects(mask, {hangsOffLeft, entirelyOffScreen}, scene.config);
+    CHECK_EQ(rects.size(), static_cast<size_t>(1));
+    CHECK_EQ(rects[0].left, 0);
+}
+
+TEST_CASE(WindowRects_RefinementTracesTheRectangleEdgeAtPixelLevel) {
+    // Window right edge at x=115: it cuts through col 11 (x 110-120)
+    // halfway. Its pixels match the wallpaper (all white), so pixel evidence
+    // alone reads nothing there -- the leaves must follow the rectangle.
+    WhiteWindowScene scene;
+    scene.window = PixelRect{20, 30, 115, 90};
+    auto mask = ComputeContentMask(scene.capture.data(), scene.wallpaper.data(), scene.config);
+    auto rects = SelectEvidencedRects(mask, {scene.window}, scene.config);
+    ForceRectsIntoMask(mask, rects, scene.config);
+    auto refinement = RefineBoundaryMask(scene.capture.data(), scene.wallpaper.data(), mask, scene.config, rects);
+
+    const size_t edgeCell = scene.Cell(5, 11); // x 110-120, y 50-60
+    auto it = refinement.cells.find(static_cast<int>(edgeCell));
+    CHECK(it != refinement.cells.end());
+    if (it == refinement.cells.end()) return;
+    // The cell's center (x=115) is exactly on the edge, i.e. outside the half-open
+    // rectangle, so the coarse mask alone left it false; refinement promotes it.
+    CHECK(mask[edgeCell]);
+    const int leafGrid = refinement.leafGrid;
+    const auto& leaves = it->second;
+    // Leftmost leaf column (x 110-111.25) is inside the window, rightmost (x 118.75-120) outside.
+    CHECK(leaves[static_cast<size_t>(0) * leafGrid + 0]);
+    CHECK(!leaves[static_cast<size_t>(0) * leafGrid + (leafGrid - 1)]);
+}
+
+TEST_CASE(WindowRects_RefinementWithoutRectsStillMissesTheSameEdge) {
+    // Control for the test above: no rectangles -> same white scene, same
+    // cell, nothing to promote (no pixel evidence to find there).
+    WhiteWindowScene scene;
+    scene.window = PixelRect{20, 30, 115, 90};
+    auto mask = ComputeContentMask(scene.capture.data(), scene.wallpaper.data(), scene.config);
+    ForceRectsIntoMask(mask, {scene.window}, scene.config);
+    RefineBoundaryMask(scene.capture.data(), scene.wallpaper.data(), mask, scene.config);
+    CHECK(!mask[scene.Cell(5, 11)]);
+}
+
+TEST_CASE(WindowRects_MismatchedMaskSizeIsANoop) {
+    WhiteWindowScene scene;
+    std::vector<bool> tooSmall(4, false);
+    ForceRectsIntoMask(tooSmall, {scene.window}, scene.config);
+    for (bool cell : tooSmall) CHECK(!cell);
+    CHECK(SelectEvidencedRects(tooSmall, {scene.window}, scene.config).empty());
 }

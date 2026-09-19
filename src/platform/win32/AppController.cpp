@@ -9,6 +9,7 @@
 #include "../../core/WallpaperFit.h"
 #include "OpenGLContext.h"
 #include "WallpaperProvider.h"
+#include "WindowRects.h"
 
 namespace platform {
 
@@ -166,16 +167,33 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     // comment).
     core::BoundaryRefinement boundaryRefinement;
     if (haveMatchingCapture) {
-        core::FillEnclosedMaskHoles(attempt.mask, gridN_);
-        core::FillMajorityNeighborCells(attempt.mask, gridN_);
-
         core::ContentMaskConfig maskConfig;
         maskConfig.screenWidth = screenWidth_;
         maskConfig.screenHeight = screenHeight_;
         maskConfig.gridN = gridN_;
+
+        // Real window/taskbar rectangles from the OS: a window is an opaque
+        // rectangle, so its interior must never be transparent, but where
+        // its body happens to match the wallpaper behind it (a white dialog
+        // over a white patch of wallpaper) the pixel diff has no evidence at
+        // all and no amount of mask-shape inference can recover the outline
+        // when the hole is open to the outside. Only rectangles the raw
+        // pixel diff already corroborates are used (core::SelectEvidencedRects),
+        // so a transparent overlay or invisible helper window can't turn
+        // plain wallpaper into content. Runs on the raw mask, before any
+        // hole filling inflates the evidence.
+        const std::vector<core::PixelRect> windowRects = core::SelectEvidencedRects(
+            attempt.mask, EnumerateVisibleWindowRects(screenWidth_, screenHeight_), maskConfig);
+        core::ForceRectsIntoMask(attempt.mask, windowRects, maskConfig);
+        core::Logger::Info("AppController: " + std::to_string(windowRects.size()) +
+                            " window rectangle(s) applied to the content mask");
+
+        core::FillEnclosedMaskHoles(attempt.mask, gridN_);
+        core::FillMajorityNeighborCells(attempt.mask, gridN_);
+
         boundaryRefinement = core::RefineBoundaryMask(desktopCapture->rgba.data(),
                                                         attempt.compositedWallpaper.rgba.data(), attempt.mask,
-                                                        maskConfig);
+                                                        maskConfig, windowRects);
 
         core::FillBoundaryStraddlingCells(attempt.mask, attempt.differingFraction, gridN_);
     }

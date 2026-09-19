@@ -119,6 +119,23 @@ struct ContentMaskConfig {
     // frame, so even the default depth of 3 costs at most a few milliseconds
     // -- see RefineBoundaryMask's own doc comment.
     int boundaryRefineMaxDepth = 3;
+
+    // Minimum fraction of a real window rectangle's cells (cell center inside
+    // the rectangle) that the raw pixel diff must already flag before
+    // SelectEvidencedRects trusts that rectangle -- see its doc comment. Low
+    // on purpose: a plain white dialog sitting on a white patch of wallpaper
+    // only ever shows its text, controls and title bar, a few percent of its
+    // area at most, and that's exactly the case rectangles exist to rescue.
+    float rectMinEvidenceFraction = 0.02f;
+};
+
+// Axis-aligned pixel rectangle, half-open: covers [left,right) x [top,bottom)
+// in the same top-down screen coordinates the capture buffer uses.
+struct PixelRect {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
 };
 
 // Returns gridN*gridN bools, in the same row-major cell order as
@@ -325,7 +342,45 @@ struct BoundaryRefinement {
 // refinement level reads exactly zero diff -- a perfect coincidental
 // pixel-for-pixel match, not something further subdivision can resolve
 // either).
+//
+// `forcedRects` (optional, already vetted by SelectEvidencedRects): every
+// sub-region whose center lies inside any of these rectangles counts as
+// content regardless of what the pixel diff says, at every level of the
+// recursion. This is what makes a real window's edge pixel-exact even where
+// the window body and the wallpaper behind it are identical (a white window
+// over a white patch of wallpaper): the boundary cell's leaves follow the
+// rectangle instead of reading "no difference" and punching a transparent
+// notch into the window. Rectangles are ignored for cells that aren't
+// boundary cells (an interior cell is already fully `true` from
+// ForceRectsIntoMask).
 BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
-                                       std::vector<bool>& mask, const ContentMaskConfig& config);
+                                       std::vector<bool>& mask, const ContentMaskConfig& config,
+                                       const std::vector<PixelRect>& forcedRects = {});
+
+// Keeps only the rectangles in `rects` (real, OS-reported visible window/
+// taskbar bounds -- see platform::EnumerateVisibleWindowRects) that the pixel
+// evidence in `rawMask` (ComputeContentMask's raw output, *before* any hole
+// filling) actually corroborates: at least config.rectMinEvidenceFraction of
+// the grid cells whose center lies in the rectangle (after clipping to the
+// screen) must already be flagged. Rejects rectangles that report a window
+// that isn't really painting anything there -- a transparent overlay, an
+// invisible helper window, a window mid-fade -- which would otherwise turn
+// plain wallpaper into "content". A rectangle too small to contain any cell
+// center is dropped too (nothing to force, and too little to vouch for it).
+std::vector<PixelRect> SelectEvidencedRects(const std::vector<bool>& rawMask, const std::vector<PixelRect>& rects,
+                                             const ContentMaskConfig& config);
+
+// In place: marks every cell whose center lies inside any rectangle of
+// `rects` as content. The point of the whole exercise: a real window is an
+// opaque rectangle, so no part of its interior may be transparent, however
+// closely its pixels happen to resemble the wallpaper behind it (pixel
+// evidence simply doesn't exist there -- nothing FillEnclosedMaskHoles/
+// FillMajorityNeighborCells can infer from the mask's shape alone when the
+// hole is open to the outside on one side, as a white window's body over a
+// white patch of wallpaper typically is). Cells that straddle a rectangle's
+// edge without their center inside are left to RefineBoundaryMask(forcedRects),
+// which resolves them at pixel level.
+void ForceRectsIntoMask(std::vector<bool>& mask, const std::vector<PixelRect>& rects,
+                         const ContentMaskConfig& config);
 
 } // namespace core

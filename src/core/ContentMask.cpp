@@ -197,6 +197,20 @@ bool EvaluateRegionFlagged(const uint8_t* captureRgba, const uint8_t* wallpaperR
     return DecideFlagged(differingFraction, captureVar, wallpaperVar, config);
 }
 
+// True if the center of the pixel region [x0,x1) x [y0,y1) lies inside any of
+// `rects` (half-open). Compared in doubled coordinates so odd-sized regions
+// need no rounding. Shared by ForceRectsIntoMask (whole grid cells) and
+// RefineQuadrant (sub-regions of a boundary cell) so a rectangle's edge means
+// the same thing at every resolution.
+bool RegionCenterInAnyRect(const std::vector<PixelRect>& rects, int x0, int x1, int y0, int y1) {
+    const int cx2 = x0 + x1;
+    const int cy2 = y0 + y1;
+    for (const PixelRect& r : rects) {
+        if (cx2 >= 2 * r.left && cx2 < 2 * r.right && cy2 >= 2 * r.top && cy2 < 2 * r.bottom) return true;
+    }
+    return false;
+}
+
 // Recursively evaluates one quadrant of a boundary cell, unconditionally
 // subdividing every quadrant down to maxDepth (not just the ones that look
 // ambiguous at a coarser scale) -- see RefineBoundaryMask's doc comment for
@@ -211,8 +225,9 @@ bool EvaluateRegionFlagged(const uint8_t* captureRgba, const uint8_t* wallpaperR
 void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, int width, int height, float gain,
                      const ContentMaskConfig& config, int x0, int x1, int y0, int y1, int depth, int maxDepth,
                      int leafGrid, int leafX0, int leafY0, int leafSpan, std::vector<bool>& leaves,
-                     bool& anyLeafFlagged) {
-    const bool flagged = EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config);
+                     bool& anyLeafFlagged, const std::vector<PixelRect>& forcedRects) {
+    const bool flagged = RegionCenterInAnyRect(forcedRects, x0, x1, y0, y1) ||
+                         EvaluateRegionFlagged(captureRgba, wallpaperRgba, width, height, x0, x1, y0, y1, gain, config);
     anyLeafFlagged = anyLeafFlagged || flagged;
 
     const bool canSubdivide = depth < maxDepth && (x1 - x0) >= 2 && (y1 - y0) >= 2;
@@ -229,13 +244,13 @@ void RefineQuadrant(const uint8_t* captureRgba, const uint8_t* wallpaperRgba, in
     const int ym = (y0 + y1) / 2;
     const int childSpan = leafSpan / 2;
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, y0, ym, depth + 1, maxDepth,
-                   leafGrid, leafX0, leafY0, childSpan, leaves, anyLeafFlagged);
+                   leafGrid, leafX0, leafY0, childSpan, leaves, anyLeafFlagged, forcedRects);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, y0, ym, depth + 1, maxDepth,
-                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, anyLeafFlagged);
+                   leafGrid, leafX0 + childSpan, leafY0, childSpan, leaves, anyLeafFlagged, forcedRects);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, xm, ym, y1, depth + 1, maxDepth,
-                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged);
+                   leafGrid, leafX0, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged, forcedRects);
     RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, xm, x1, ym, y1, depth + 1, maxDepth,
-                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged);
+                   leafGrid, leafX0 + childSpan, leafY0 + childSpan, childSpan, leaves, anyLeafFlagged, forcedRects);
 }
 
 } // namespace
@@ -455,8 +470,60 @@ void FillBoundaryStraddlingCells(std::vector<bool>& mask, const std::vector<floa
     }
 }
 
+std::vector<PixelRect> SelectEvidencedRects(const std::vector<bool>& rawMask, const std::vector<PixelRect>& rects,
+                                             const ContentMaskConfig& config) {
+    std::vector<PixelRect> kept;
+    const int n = config.gridN;
+    const int width = config.screenWidth;
+    const int height = config.screenHeight;
+    if (n <= 0 || width <= 0 || height <= 0 || rawMask.size() != static_cast<size_t>(n) * n) return kept;
+
+    for (const PixelRect& rect : rects) {
+        const PixelRect clipped{std::max(rect.left, 0), std::max(rect.top, 0), std::min(rect.right, width),
+                                std::min(rect.bottom, height)};
+        if (clipped.right <= clipped.left || clipped.bottom <= clipped.top) continue;
+
+        long long total = 0, flagged = 0;
+        for (int row = 0; row < n; ++row) {
+            const int y0 = (row * height) / n;
+            const int y1 = ((row + 1) * height) / n;
+            for (int col = 0; col < n; ++col) {
+                const int x0 = (col * width) / n;
+                const int x1 = ((col + 1) * width) / n;
+                if (!RegionCenterInAnyRect({clipped}, x0, x1, y0, y1)) continue;
+                ++total;
+                if (rawMask[static_cast<size_t>(row) * n + col]) ++flagged;
+            }
+        }
+        if (total == 0) continue;
+        if (static_cast<float>(flagged) / static_cast<float>(total) >= config.rectMinEvidenceFraction) {
+            kept.push_back(clipped);
+        }
+    }
+    return kept;
+}
+
+void ForceRectsIntoMask(std::vector<bool>& mask, const std::vector<PixelRect>& rects,
+                         const ContentMaskConfig& config) {
+    const int n = config.gridN;
+    const int width = config.screenWidth;
+    const int height = config.screenHeight;
+    if (rects.empty() || n <= 0 || width <= 0 || height <= 0 || mask.size() != static_cast<size_t>(n) * n) return;
+
+    for (int row = 0; row < n; ++row) {
+        const int y0 = (row * height) / n;
+        const int y1 = ((row + 1) * height) / n;
+        for (int col = 0; col < n; ++col) {
+            const int x0 = (col * width) / n;
+            const int x1 = ((col + 1) * width) / n;
+            if (RegionCenterInAnyRect(rects, x0, x1, y0, y1)) mask[static_cast<size_t>(row) * n + col] = true;
+        }
+    }
+}
+
 BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t* wallpaperRgba,
-                                       std::vector<bool>& mask, const ContentMaskConfig& config) {
+                                       std::vector<bool>& mask, const ContentMaskConfig& config,
+                                       const std::vector<PixelRect>& forcedRects) {
     BoundaryRefinement result;
     const int gridN = config.gridN;
     const int width = config.screenWidth;
@@ -490,7 +557,7 @@ BoundaryRefinement RefineBoundaryMask(const uint8_t* captureRgba, const uint8_t*
             std::vector<bool> leaves(static_cast<size_t>(leafGrid) * leafGrid, self);
             bool anyLeafFlagged = false;
             RefineQuadrant(captureRgba, wallpaperRgba, width, height, gain, config, x0, x1, y0, y1, /*depth=*/0,
-                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, anyLeafFlagged);
+                           config.boundaryRefineMaxDepth, leafGrid, 0, 0, leafGrid, leaves, anyLeafFlagged, forcedRects);
 
             // Only ever promote -- see the function's doc comment on why a
             // cell already `true` is left alone even if every leaf disagrees.

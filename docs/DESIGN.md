@@ -627,3 +627,46 @@ v2.0.0までは、上物が消え終わると`STATE_BACKGROUND`に入り、背�
 確認済み。`platform::CreateMaskedTextureFromImage`/`AppController::Initialize`側の配線は
 Windows専用のためこのリポジトリのLinux環境ではビルド確認できておらず、実機・CI(MSVCビルド)
 での確認が必要。
+
+### 9.12 白いウィンドウ×白い壁紙: OS のウィンドウ矩形で上物の内部を埋める (ユーザー要望)
+
+**症状(実機)**: 壁紙を白い領域を含む画像に変えたところ、ウィンドウの地の部分が広い面積で
+透過に侵食された。「上物の不透過領域はアイコンとウィンドウからなり、基本的に長方形の和集合
+なのだから、長方形の内部に透過領域が入り込まないようにできないか」。
+
+**原因**: ウィンドウの地の色が壁紙の白い領域と一致すると、そこにはピクセル差分の証拠がそもそも
+存在しない(色差分もテクスチャ平坦度も0)。マスクの形からの推定(`FillEnclosedMaskHoles` /
+`FillMajorityNeighborCells`)は、穴が四方を囲まれている場合にしか効かない。白いウィンドウの地は
+壁紙の白い領域へ向かって外側に開いていることが多く、また文字などが散在するだけの白い窓では
+マスク上に輪郭がない。マスクの形だけから外接長方形を推定する案も検討したが、アイコン列と
+タスクバーが繋がった場合に画面全体を埋めてしまうなど、誤埋めを防ぐ手段がなく見送った。
+
+**対応**: 実際のウィンドウ矩形を外部証拠として使う(旧方式§9.1の2は「個々のウィンドウを
+個別のアニメーション対象にする」ことが目的で廃止したもので、矩形そのものの取得は
+今回のような補助証拠としてなら有効)。
+
+- `platform::EnumerateVisibleWindowRects`(`WindowRects.{h,cpp}`): `EnumWindows`で可視・
+  非最小化・非cloaked・自プロセス以外のトップレベルウィンドウ(タスクバー含む)の矩形を取得。
+  `Progman`/`WorkerW`(壁紙・アイコンのホスト)、クリック透過のレイヤードウィンドウ、
+  ほぼ透明なレイヤードウィンドウは除外。矩形は`DWMWA_EXTENDED_FRAME_BOUNDS`(リサイズ用の
+  見えない縁を含まない)を優先し、DPI非対応プロセスでは`DESKTOPHORZRES`/`SM_CXSCREEN`の比で
+  キャプチャと同じ座標系へ換算する。
+- `core::SelectEvidencedRects`: 矩形を無条件には信用せず、その内側(セル中心が矩形内)の
+  生マスク(穴埋め前)のうち`ContentMaskConfig::rectMinEvidenceFraction`(既定2%)以上が
+  既にcontentと判定されている矩形だけ採用する。透明オーバーレイや実際には何も描画して
+  いない不可視ウィンドウが、壁紙そのものをcontent扱いにするのを防ぐ。白い窓でも
+  文字・コントロール・タイトルバーで数%は差分が出るため、閾値は低く設定している。
+- `core::ForceRectsIntoMask`: 採用した矩形内にセル中心を持つセルをすべてtrueにする。
+- `core::RefineBoundaryMask(..., forcedRects)`: 矩形の縁をまたぐセルは、細分化の各階層で
+  「部分領域の中心が矩形内なら常にcontent」とすることで、白い窓でも縁がピクセル単位で
+  矩形に追従する(矩形なしでは差分ゼロのため読み取れない)。
+- 呼び出し順: `ComputeContentMask` → 壁紙陳腐化チェック → **矩形の選別・強制** →
+  `FillEnclosedMaskHoles` → `FillMajorityNeighborCells` → `RefineBoundaryMask` →
+  `FillBoundaryStraddlingCells`。選別は穴埋めより前の生マスクで行う(穴埋めで証拠が
+  水増しされるのを避ける)。
+- アイコンは従来どおりピクセル差分のみ(矩形なし)。デスクトップアイコンのリストビュー
+  取得は行わない。
+
+`src/core/`側(`tests/test_ContentMask.cpp`の`WindowRects_*`、白い窓×白い壁紙の合成シーン)は
+Linux上で確認済み。`WindowRects.cpp`と`AppController::Initialize`の配線はWindows専用のため
+このLinux環境ではビルドできず、CI(MSVC)と実機での確認が必要。

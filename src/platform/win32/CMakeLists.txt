@@ -18,6 +18,7 @@ set(WIN32_SOURCES
     WallpaperProvider.cpp
     WinFileIO.cpp
     WinMain.cpp
+    WindowRects.cpp
     ${CMAKE_SOURCE_DIR}/resources/ScreenSaver.rc
 )
 
@@ -79,6 +80,7 @@ target_link_libraries(SpiralSuctionSaver PRIVATE
     ole32
     windowscodecs
     advapi32
+    dwmapi
 )
 
 # A screensaver is an ordinary Win32 GUI executable, just renamed with a
