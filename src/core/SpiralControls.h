@@ -1,5 +1,5 @@
 #pragma once
-// ScrKit's spiral-suction saver SCRAPI surface (docs/DESIGN_VIEWER.md §B.6): the manifest it
+// ScrKit.scr's SCRAPI surface (docs/DESIGN_VIEWER.md §B.6): the manifest it
 // declares, and the binder that turns validated control changes into calls on the
 // effect engine. Depends only on core::fx and src/scrapi, so all of it is
 // unit-testable without Windows; the Win32 side only supplies the transport and

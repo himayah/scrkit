@@ -1,8 +1,8 @@
-# SCRAPI 対応 spiral-suction 拡張と ScrViewer の設計
+# SCRAPI 対応 ScrKit.scr 拡張と ScrViewer の設計
 
 > 状態: **実装済み・main に統合済み** (v3.0.0)。実装の進み具合と設計からの変更点は §F。
 > 汎用 API 仕様は [`SCRAPI_SPEC.md`](SCRAPI_SPEC.md)。本書は (A) その仕様の採用方針、
-> (B) spiral-suction (ScrKit.scr) 側の拡張、(C) ビュワー `ScrViewer`、(D) 検証計画・段階計画、
+> (B) ScrKit.scr 側の拡張、(C) ビュワー `ScrViewer`、(D) 検証計画・段階計画、
 > (E) 未決事項、をまとめる。本書は設計を固める段階のもので、現行仕様は [`DESIGN.md`](DESIGN.md)。
 
 ## 0. 要件の整理
@@ -46,7 +46,7 @@ ScrViewer.exe                                   spiral.scr (別プロセス)
 > 出す・即終了する等)。ビュワーは接続タイムアウトとプロセス終了検知で必ずフォールバックする (SPEC §3)。
 > ホスト HWND を持たない起動(`/scrapi` のみ)は仕様外。
 
-## B. spiral-suction (ScrKit.scr) の拡張
+## B. ScrKit.scr の拡張
 
 ### B.1 全体構成
 

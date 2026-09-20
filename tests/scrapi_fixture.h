@@ -1,6 +1,6 @@
 #pragma once
 // A small saver-agnostic manifest exercising every control type, shared by the
-// SCRAPI tests. Deliberately unrelated to any specific saver (ScrKit's spiral-suction one included).
+// SCRAPI tests. Deliberately unrelated to ScrKit.scr's own manifest.
 
 #include "../src/scrapi/Manifest.h"
 

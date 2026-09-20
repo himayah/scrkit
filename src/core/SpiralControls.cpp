@@ -200,7 +200,11 @@ ControlNode EffectParamGroup(LayerKind layer, EffectId id, const fx::EffectParam
 
 Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string& version) {
     Manifest m;
-    m.saver = {"jp.himayah.scrkit.spiral-suction", "Spiral Suction", version};
+    // "ScrKit" both here and as the project name: this is currently the project's only .scr, so a
+    // separate per-effect brand name (the old "Spiral Suction") would only invite the same kind of
+    // staleness the project rename itself was fixing -- especially since VortexSuction is just one
+    // of many effects the layers cycle through, not a fixed finale (see docs/DESIGN.md §9.10).
+    m.saver = {"jp.himayah.scrkit", "ScrKit", version};
     m.capabilities = {"scrapi.paused", "scrapi.timeScale", "scrapi.step", "scrapi.seed", "scrapi.restart", "viewport.resize"};
 
     m.controls.push_back(LayerGroup(LayerKind::Background, defaults.background, defaults.backgroundDirective));

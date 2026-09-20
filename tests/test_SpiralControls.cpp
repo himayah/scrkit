@@ -162,7 +162,7 @@ TEST_CASE(SpiralManifest_DefaultsMirrorTheEngineConfiguration) {
 TEST_CASE(SpiralControls_SessionStartsWithEveryControlPopulated) {
     SpiralRig rig;
     CHECK(rig.client.state() == ClientCore::State::Ready);
-    CHECK(rig.client.saver().name == "Spiral Suction");
+    CHECK(rig.client.saver().name == "ScrKit");
     CHECK(rig.client.model() != nullptr);
     CHECK(rig.client.model()->Get("scrapi.timeScale")->AsDouble() == 1.0);
 }
