@@ -1,4 +1,4 @@
-# Spiral Suction Saver 設計書
+# ScrKit (Spiral Suction) 設計書
 
 対象: `要件.txt` に基づく Windows スクリーンセーバー (.scr)。
 本書は `skil.md` の定める「設計書は第三者が読んでも実装可能なレベルまで詳細化する」を満たすことを目的とする。
@@ -108,7 +108,7 @@ flowchart TB
 | `WallpaperProvider` | `SystemParametersInfoW(SPI_GETDESKWALLPAPER)` で現在の壁紙パスを取得(読み取り専用)。パスが空(壁紙が画像ではなく単色背景に設定されている場合、Windowsはエラーではなく空文字列を返す)の場合に備え、`GetSysColor(COLOR_DESKTOP)`で実際の単色背景色を取得する`GetSystemDesktopColor`も提供する。また`HKCU\Control Panel\Desktop`の`WallpaperStyle`/`TileWallpaper`(読み取り専用)から実際の壁紙表示設定を判定する`GetSystemWallpaperFitMode`も提供し、`core::WallpaperFit`に渡す。 |
 | `ConfigDialogWin32` | `/c` 設定ダイアログ (プリセットコンボ、カスタム数値、Auto検出結果表示、壁紙上書き選択)。「Effects...」ボタンからエフェクトシステム専用のダイアログ(→ DESIGN_EFFECTS.md §9.5)を開ける。 |
 | `HueRingBuilder` | HueShiftエフェクト用の色相回転テクスチャをワーカースレッドで事前生成する(→ DESIGN_EFFECTS.md §6.2.8.1)。GL呼び出しは主スレッドのみ。 |
-| `AppPaths` / `WinFileIO` | `%APPDATA%/SpiralSuctionSaver/{config.ini,saver.log}` の解決とワイド文字パスでのファイルI/O (非ASCIIユーザー名対策)。 |
+| `AppPaths` / `WinFileIO` | `%APPDATA%/ScrKit/{config.ini,saver.log}` の解決とワイド文字パスでのファイルI/O (非ASCIIユーザー名対策)。 |
 | `FileLogSink` | `core::Logger` にファイル出力シンクを登録 (1MB超でローテート)。 |
 | `StringConvert` | UTF-8 (core側の文字列表現) ⇄ UTF-16 (Win32 API) 変換。 |
 
@@ -193,16 +193,16 @@ sequenceDiagram
 ## 6. ロギング方針
 
 `core::Logger` はシンク注入型。本番は `platform::InstallFileLogSink()` が
-`%APPDATA%/SpiralSuctionSaver/saver.log` への追記シンクを登録し、1MBを超えたら
+`%APPDATA%/ScrKit/saver.log` への追記シンクを登録し、1MBを超えたら
 ローテート（切り詰めて再作成）する。ユニットテストではシンクを設定しない
 (またはメモリキャプチャに差し替える) ため、ファイルI/Oなしでロジックを検証できる。
 
 ## 7. 設定ファイル仕様
 
-`%APPDATA%/SpiralSuctionSaver/config.ini`:
+`%APPDATA%/ScrKit/config.ini`:
 
 ```ini
-[SpiralSuctionSaver]
+[ScrKit]
 Preset=Mid
 CustomParticleCount=3000
 BackgroundImageOverride=
@@ -266,10 +266,10 @@ Win32/OpenGL実装はLinux開発機でコンパイルできないため、GitHub
 
 ### 8.3 手動確認チェックリスト (Windows実機)
 
-- [ ] `SpiralSuctionSaver.scr /s` でフルスクリーン起動し、差分ブロック→背景粒子→
+- [ ] `ScrKit.scr /s` でフルスクリーン起動し、差分ブロック→背景粒子→
       黒→フェードイン→リセットの順にループすることを目視確認する。
 - [ ] キー入力・クリック・一定量のマウス移動で `/s` が終了することを確認する。
-- [ ] `SpiralSuctionSaver.scr /c` で設定ダイアログが開き、プリセット変更・カスタム値・
+- [ ] `ScrKit.scr /c` で設定ダイアログが開き、プリセット変更・カスタム値・
       Auto判定結果表示・背景画像の変更ができ、`config.ini` に保存されることを確認する。
 - [ ] Windowsの「スクリーンセーバーの設定」プレビュー枠で `/p` によるプレビューが表示され、
       設定ダイアログを閉じるとプレビューも終了することを確認する(プレビューは実画面キャプチャ
@@ -432,7 +432,7 @@ dThetaを緩めても、中心付近で`centerAccelFactor`が上乗せする角�
 
 そこで、起動シーケンスの各ステップに`QueryPerformanceCounter`ベースの所要時間ログと、
 キャプチャ画像・壁紙合成画像の明るさのサンプリングログを一時的に追加し、実機のログ
-(`%APPDATA%/SpiralSuctionSaver/saver.log`)を確認したところ、**キャプチャ・ウィンドウ
+(`%APPDATA%/ScrKit/saver.log`)を確認したところ、**キャプチャ・ウィンドウ
 生成・OpenGL初期化・`AppController::Initialize`を含む全工程が一貫して200ミリ秒未満で
 完了しており**、アプリのコード内には2秒に相当する遅延が存在しないことが判明した。
 
@@ -717,3 +717,29 @@ v2.1.0リリース後、SCRAPI/ScrViewer開発(別ブランチ)での実機検�
 `debug_reference.bmp`を直接比較する形で行った(ログの`Reference vs capture`診断行は画面全体
 を比較するため、ウィンドウが大半を占める実機では相関が低く出ても壁紙リファレンス自体の
 異常とは限らない点に注意。詳細は`ContentMask.h`の`ReferenceComparison`のコメントを参照)。
+
+### 9.14 SCRAPI/ScrViewer の main への統合、プロジェクト名を ScrKit に変更 (v3.0.0、ユーザー要望)
+
+`feature/scrapi-viewer`ブランチ(SCRAPIプロトコル`src/scrapi`、汎用ビューア`src/viewer`
+`ScrViewer.exe`、本サーバー側のSCRAPI配線`ScrApiHost`/`ScrApiPipe`)を`main`にマージした。
+これに伴い、リポジトリ名が実態(単一のスクリーンセーバーではなく、汎用プロトコル+汎用
+ビューア+その参照実装であるスクリーンセーバー本体、の3点セット)と乖離してきたとの
+ユーザー指摘により、プロジェクト名を`SpiralSuctionSaver`から**`ScrKit`**に変更した。
+
+- CMakeプロジェクト名・`.scr`のビルドターゲット名/出力名: `ScrKit`(`ScrKit.scr`)。
+- 実行時の設定/ログ保存先: `%APPDATA%\ScrKit\`(`config.ini`の`[ScrKit]`セクション名も追随。
+  パース処理自体はセクション名を見ずに`Section::Other`として扱うため、既存の
+  `[SpiralSuctionSaver]`セクションを含む設定ファイルとの後方互換に影響はない)。
+- ウィンドウクラス名・ダイアログタイトル・起動/終了ログ・設定ダイアログのキャプション:
+  すべて`ScrKit`に統一。
+- SCRAPIマニフェストの`SaverIdentity`(`core::BuildSpiralManifest`)は、プロジェクト全体
+  ではなく**この特定のスクリーンセーバー**を指す識別子として、`id`を
+  `jp.himayah.scrkit.spiral-suction`、`name`を`"Spiral Suction"`に変更(「Saver」の重複を
+  除去。将来ScrKit配下に別の`.scr`が増えても衝突しない命名)。
+- `GitHub`リポジトリ本体も`himayah/scrkit`に改名(旧URLはGitHubが自動リダイレクト)。
+- `src/core/effects/`配下のエフェクトクラス名(`SuctionEffect`/`VortexSuction`等)、内部
+  ライブラリ名(`spiral_core`)は、実際にスパイラル吸い込みエフェクトを指しており実態と
+  乖離していないため変更していない。`docs/DESIGN_EFFECTS.md`・`docs/REVIEW_DESIGN_EFFECTS.md`・
+  `要件.txt`・`追加要件.txt`は、いずれも作成当時の記録として凍結されている既存の方針
+  ([[feedback-cleanup-diagnostics]]と同様の「過去ログは書き換えない」方針)に従い、
+  文中の旧名称もそのまま残している。

@@ -107,7 +107,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*l
                       int /*nCmdShow*/) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     platform::InstallFileLogSink();
-    core::Logger::Info("Spiral Suction Saver starting");
+    core::Logger::Info("ScrKit starting");
 
     const ParsedArgs args = ParseCommandLine();
     switch (args.mode) {
@@ -123,7 +123,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*l
             break;
     }
 
-    core::Logger::Info("Spiral Suction Saver exiting");
+    core::Logger::Info("ScrKit exiting");
     CoUninitialize();
     return 0;
 }

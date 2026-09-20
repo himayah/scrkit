@@ -12,7 +12,7 @@ std::wstring GetAppDataDirectory() {
     }
 
     std::wstring dir = buffer;
-    dir += L"\\SpiralSuctionSaver";
+    dir += L"\\ScrKit";
 
     // Best-effort create; ERROR_ALREADY_EXISTS is fine.
     if (!CreateDirectoryW(dir.c_str(), nullptr)) {

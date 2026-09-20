@@ -33,7 +33,7 @@ const wchar_t* kPresetLabels[] = {
 constexpr int kPresetCount = 6;
 
 int QueryAutoParticleCountViaTempContext() {
-    const wchar_t* className = L"SpiralSuctionSaverTempGL";
+    const wchar_t* className = L"ScrKitTempGL";
     WNDCLASSW wc{};
     wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandleW(nullptr);
@@ -134,7 +134,7 @@ int ReadCustomCountOrDefault(HWND hDlg) {
         // fall through to default below
     }
     MessageBoxW(hDlg, L"Custom particle count must be a positive number. Using 3000.",
-                L"Spiral Suction Saver", MB_OK | MB_ICONWARNING);
+                L"ScrKit", MB_OK | MB_ICONWARNING);
     return core::ConfigModel::ParticleCountForPreset(core::ParticlePreset::Mid);
 }
 

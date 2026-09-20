@@ -200,7 +200,7 @@ ControlNode EffectParamGroup(LayerKind layer, EffectId id, const fx::EffectParam
 
 Manifest BuildSpiralManifest(const fx::EngineConfig& defaults, const std::string& version) {
     Manifest m;
-    m.saver = {"jp.himayah.spiral-suction-saver", "Spiral Suction Saver", version};
+    m.saver = {"jp.himayah.scrkit.spiral-suction", "Spiral Suction", version};
     m.capabilities = {"scrapi.paused", "scrapi.timeScale", "scrapi.step", "scrapi.seed", "scrapi.restart", "viewport.resize"};
 
     m.controls.push_back(LayerGroup(LayerKind::Background, defaults.background, defaults.backgroundDirective));

@@ -1,4 +1,19 @@
-# Spiral Suction Saver
+# ScrKit
+
+Windows スクリーンセーバー(`.scr`)本体・それを外部から操作する汎用プロトコル・汎用ビュー
+アの3点セットです。
+
+- **Spiral Suction**(`ScrKit.scr`) -- 本リポジトリに同梱されている、実際に動作するスクリーン
+  セーバー本体(詳細は下記)。
+- **SCRAPI** -- スクリーンセーバー本体を外部の汎用ビューアから操作するための、名前付きパイプ
+  上の JSON Lines プロトコル。特定のスクリーンセーバーに依存しない汎用仕様です
+  ([`docs/SCRAPI_SPEC.md`](docs/SCRAPI_SPEC.md))。
+- **ScrViewer** -- SCRAPI 対応の `.scr` ならどれでも開ける汎用ビューア/コントロールパネル。
+  `/p` プレビューを埋め込み、`.scr` が申告するマニフェストからコントロール(ドロップダウン・
+  スライダー・ノブ・トグル等)を動的に構築します
+  ([`docs/DESIGN_VIEWER.md`](docs/DESIGN_VIEWER.md))。
+
+以下、同梱のスクリーンセーバー本体 **Spiral Suction** について説明します。
 
 デスクトップのアイコン・開いているウィンドウ(以下「上物」)と壁紙(以下「背景」)を、それぞれ
 独立したレイヤーとして扱い、専用の多彩な演出エフェクト(上物14種・背景11種)を**互いに無関係な
@@ -125,7 +140,7 @@
   調査の詳細な記録は [`docs/DESIGN.md` §9.9](docs/DESIGN.md) を参照してください。
 - **らせん軌道の演出**: 背景粒子は中心に近づくほど角速度が上乗せされる
   (`SpiralParams::centerAccelFactor`) ため、吸い込まれる画像がらせん状に歪んで見えます。
-- **設定の保存**: レジストリではなく `%APPDATA%\SpiralSuctionSaver\config.ini` に保存します。
+- **設定の保存**: レジストリではなく `%APPDATA%\ScrKit\config.ini` に保存します。
 - **アーキテクチャ**: 純粋ロジック (`src/core/`、エフェクトシステムは `src/core/effects/`) と
   Win32/OpenGL 実装 (`src/platform/win32/`) を分離しており、`src/core/` は Windows 非依存の
   C++17 のみで書かれているため Linux 上でもビルド・単体テストできます。詳細は
@@ -162,7 +177,7 @@ stateDiagram-v2
 ```powershell
 cmake -S . -B build
 cmake --build build --config Release
-# 生成物: build\src\platform\win32\Release\SpiralSuctionSaver.scr
+# 生成物: build\src\platform\win32\Release\ScrKit.scr
 ```
 
 ### ビルド方法 (Linux/WSL2 から MinGW-w64 でクロスコンパイル)
@@ -171,7 +186,7 @@ cmake --build build --config Release
 sudo apt install g++-mingw-w64-x86-64 mingw-w64-x86-64-dev binutils-mingw-w64-x86-64
 cmake -S . -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-toolchain.cmake
 cmake --build build-win
-# 生成物: build-win/src/platform/win32/SpiralSuctionSaver.scr
+# 生成物: build-win/src/platform/win32/ScrKit.scr
 ```
 
 この手順は開発中に実際に検証済みです（ローカルに展開した MinGW-w64 でクロスコンパイルし、
@@ -209,11 +224,11 @@ cmake --build build-win
    ```bash
    gh run list --repo <owner>/<repo> --limit 5           # 実行一覧から run ID を確認
    gh run download <run-id> --repo <owner>/<repo> \
-       -n SpiralSuctionSaver-scr -D ./downloaded
+       -n ScrKit-scr -D ./downloaded
    ```
 
    ブラウザから行う場合は、該当の Actions 実行ページを開き、「Artifacts」欄の
-   `SpiralSuctionSaver-scr` をクリックしてダウンロードします（zip 展開後に `.scr` が
+   `ScrKit-scr` をクリックしてダウンロードします（zip 展開後に `.scr` が
    出てきます）。
 
 #### 安定版を試す (GitHub Releases)
@@ -226,7 +241,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-リポジトリの「Releases」ページから該当バージョンの `SpiralSuctionSaver.scr` を直接
+リポジトリの「Releases」ページから該当バージョンの `ScrKit.scr` を直接
 ダウンロードできます。ビルド環境を用意せずすぐ試したいだけであれば、こちらが最も簡単です。
 ダウンロードしたファイルは、そのまま [起動方法](#起動方法) の手順で使えます。
 
@@ -243,9 +258,9 @@ ctest --test-dir build-tests --output-on-failure
 
 ## 起動方法
 
-`SpiralSuctionSaver.scr` は通常の Windows スクリーンセーバーとして動作します。
+`ScrKit.scr` は通常の Windows スクリーンセーバーとして動作します。
 
-1. `SpiralSuctionSaver.scr` を `C:\Windows\System32` (または任意の場所) に配置します。
+1. `ScrKit.scr` を `C:\Windows\System32` (または任意の場所) に配置します。
 2. エクスプローラーでファイルを右クリックし「インストール」を選ぶか、ダブルクリックすると
    設定画面が開きます。
 3. Windows の「設定 → 個人用設定 → ロック画面 → スクリーンセーバー」からも選択できます。
@@ -274,7 +289,7 @@ ctest --test-dir build-tests --output-on-failure
 5. 次のコマンドでコピーします（パスは実際の配置場所に合わせて書き換えてください）。
 
    ```cmd
-   copy "C:\path\to\SpiralSuctionSaver.scr" "C:\Windows\System32\"
+   copy "C:\path\to\ScrKit.scr" "C:\Windows\System32\"
    ```
 
 #### 方法B: エクスプローラーを管理者権限で開いてコピーする
@@ -329,7 +344,7 @@ System32 の権限を緩めている間はセキュリティ上のリスクが�
 4. 標準ユーザーのアカウントで `.scr` を `System32` にコピーします。
 
    ```cmd
-   copy "C:\path\to\SpiralSuctionSaver.scr" "C:\Windows\System32\"
+   copy "C:\path\to\ScrKit.scr" "C:\Windows\System32\"
    ```
 
 5. **コピーが終わったら、必ず直後に元の状態へ戻します**（再び管理者権限のコマンドプロンプトで
@@ -357,9 +372,9 @@ System32 の権限を緩めている間はセキュリティ上のリスクが�
 
 | 引数 | 動作 |
 |---|---|
-| `SpiralSuctionSaver.scr /s` | フルスクリーンでスクリーンセーバーを開始します。 |
-| `SpiralSuctionSaver.scr /c` | 設定ダイアログを表示します。 |
-| `SpiralSuctionSaver.scr /p <HWND>` | 指定したウィンドウ内にプレビュー描画します
+| `ScrKit.scr /s` | フルスクリーンでスクリーンセーバーを開始します。 |
+| `ScrKit.scr /c` | 設定ダイアログを表示します。 |
+| `ScrKit.scr /p <HWND>` | 指定したウィンドウ内にプレビュー描画します
   (Windows の「スクリーンセーバーの設定」画面が内部的に使用します)。 |
 | 引数なし | 設定ダイアログを表示します（Windows の慣習に合わせた既定動作）。 |
 
@@ -369,7 +384,7 @@ System32 の権限を緩めている間はセキュリティ上のリスクが�
   Custom を選ぶと任意の粒子数を、Auto を選ぶと現在の GPU から自動判定した推奨粒子数が
   表示されます。背景画像は既定で現在の壁紙が使われますが、「Browse...」から任意の画像に
   変更するか、「Use system wallpaper」で自動取得に戻せます。設定は OK を押すと
-  `%APPDATA%\SpiralSuctionSaver\config.ini` に保存されます。
+  `%APPDATA%\ScrKit\config.ini` に保存されます。
 - **「Effects...」ボタン**: レイヤー分離エフェクトシステム専用の設定ダイアログを開きます。
   エフェクト全体の有効/無効、上物・背景それぞれの演出時間(最小/最大秒数)と上物の
   ショーケース時間、上物 14 種・背景 11 種それぞれの一覧(チェックボックスで有効/無効)と
@@ -394,7 +409,7 @@ System32 の権限を緩めている間はセキュリティ上のリスクが�
   フェーズから始まります）。
 - OS の設定（壁紙など）を変更することはありません。壁紙・画面の取得はいずれも読み取り専用です。
 - 対応解像度はプライマリディスプレイのみです（マルチモニタでの動作範囲外）。
-- ログは `%APPDATA%\SpiralSuctionSaver\saver.log` に出力されます（1MB を超えると自動的に
+- ログは `%APPDATA%\ScrKit\saver.log` に出力されます（1MB を超えると自動的に
   ローテートされます）。
 
 ## テスト

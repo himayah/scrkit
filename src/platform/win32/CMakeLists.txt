@@ -24,9 +24,9 @@ set(WIN32_SOURCES
     ${CMAKE_SOURCE_DIR}/resources/ScreenSaver.rc
 )
 
-add_executable(SpiralSuctionSaver WIN32 ${WIN32_SOURCES})
+add_executable(ScrKit WIN32 ${WIN32_SOURCES})
 
-target_include_directories(SpiralSuctionSaver PRIVATE
+target_include_directories(ScrKit PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/resources
 )
@@ -45,7 +45,7 @@ target_include_directories(SpiralSuctionSaver PRIVATE
 # this, `std::max`/`std::min` calls anywhere in the code get silently
 # mangled by those macros (MSVC reports it as a confusing
 # "illegal token on right side of '::'" syntax error).
-target_compile_definitions(SpiralSuctionSaver PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_definitions(ScrKit PRIVATE UNICODE _UNICODE NOMINMAX)
 
 if(MINGW)
     # windres's own built-in preprocessor does not predefine _WIN32/_WIN64,
@@ -68,10 +68,10 @@ if(MINGW)
     # invocations are launched by explorer.exe/the Settings app, not by the
     # user directly, so a missing-DLL failure there can show no visible error
     # at all instead of the loader dialog seen when double-clicking the file.
-    target_link_options(SpiralSuctionSaver PRIVATE -static-libgcc -static-libstdc++ -static)
+    target_link_options(ScrKit PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
 
-target_link_libraries(SpiralSuctionSaver PRIVATE
+target_link_libraries(ScrKit PRIVATE
     spiral_core
     opengl32
     gdi32
@@ -88,7 +88,7 @@ target_link_libraries(SpiralSuctionSaver PRIVATE
 # A screensaver is an ordinary Win32 GUI executable, just renamed with a
 # .scr extension -- Windows recognizes and launches it identically to a
 # .exe (要件.txt §1: 出力は単一の .scr ファイルとしてビルド可能にする).
-set_target_properties(SpiralSuctionSaver PROPERTIES
-    OUTPUT_NAME "SpiralSuctionSaver"
+set_target_properties(ScrKit PROPERTIES
+    OUTPUT_NAME "ScrKit"
     SUFFIX ".scr"
 )

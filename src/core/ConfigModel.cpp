@@ -140,14 +140,14 @@ Section SectionFromHeaderLine(const std::string& line) {
     if (name == "effects") return Section::Effects;
     if (name == "foregroundeffects") return Section::ForegroundEffects;
     if (name == "backgroundeffects") return Section::BackgroundEffects;
-    return Section::Other; // includes [SpiralSuctionSaver] and anything unknown
+    return Section::Other; // includes [ScrKit] and anything unknown
 }
 
 } // namespace
 
 std::string SerializeConfigIni(const ConfigModel& config) {
     std::ostringstream out;
-    out << "[SpiralSuctionSaver]\n";
+    out << "[ScrKit]\n";
     out << "Preset=" << PresetToString(config.preset) << "\n";
     out << "CustomParticleCount=" << config.customParticleCount << "\n";
     out << "BackgroundImageOverride=" << config.backgroundImageOverridePath << "\n";
@@ -289,7 +289,7 @@ ConfigModel ParseConfigIni(const std::string& iniText) {
                 Logger::Warn("config.ini: unknown field '" + field + "' for effect " + effectName);
             }
         }
-        // Section::Other (includes [SpiralSuctionSaver]): only the 3
+        // Section::Other (includes [ScrKit]): only the 3
         // back-compat keys above apply; anything else here is ignored.
     }
 

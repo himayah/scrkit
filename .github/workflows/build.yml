@@ -19,7 +19,7 @@ jobs:
       - name: Configure (CMake + MSVC)
         run: cmake -S . -B build
 
-      - name: Build SpiralSuctionSaver.scr
+      - name: Build ScrKit.scr
         run: cmake --build build --config Release
 
       # Available from any push/PR run's "Artifacts" section as a dev build
@@ -28,8 +28,8 @@ jobs:
       - name: Upload .scr artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SpiralSuctionSaver-scr
-          path: build/src/platform/win32/Release/SpiralSuctionSaver.scr
+          name: ScrKit-scr
+          path: build/src/platform/win32/Release/ScrKit.scr
 
       # The SCRAPI viewer (docs/DESIGN_VIEWER.md) -- a dev build for now; not attached to releases.
       - name: Upload ScrViewer artifact
@@ -51,12 +51,12 @@ jobs:
       - name: Download .scr built by windows-build
         uses: actions/download-artifact@v4
         with:
-          name: SpiralSuctionSaver-scr
+          name: ScrKit-scr
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: SpiralSuctionSaver.scr
+          files: ScrKit.scr
 
   # Platform-independent core logic (spiral math, state machine, config
   # parsing, particle grid, GPU tier classification, ...) built and unit

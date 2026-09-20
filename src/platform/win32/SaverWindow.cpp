@@ -21,7 +21,7 @@ namespace platform {
 
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"SpiralSuctionSaverWindow";
+constexpr wchar_t kWindowClassName[] = L"ScrKitWindow";
 constexpr double kTargetFrameSeconds = 1.0 / 60.0; // 要件.txt §2: 60fps目標
 constexpr LONG kMouseMoveExitThresholdPx = 8;
 constexpr UINT kPreviewParentWatchTimerId = 1;
@@ -286,7 +286,7 @@ void RunFullScreenSaver(HINSTANCE instance) {
     // row falls off the bottom edge of the monitor and is never drawn to
     // (the GL viewport below still uses the real width x height), so this
     // has no visible effect beyond avoiding that transition.
-    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kWindowClassName, L"Spiral Suction Saver",
+    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kWindowClassName, L"ScrKit",
                                  WS_POPUP | WS_VISIBLE, 0, 0, width, height + 1, nullptr, nullptr,
                                  instance, nullptr);
     if (!hwnd) {
@@ -306,7 +306,7 @@ void RunFullScreenSaver(HINSTANCE instance) {
     } else {
         core::Logger::Error("RunFullScreenSaver: OpenGL context creation failed");
         MessageBoxW(hwnd, L"Failed to initialize OpenGL. The screensaver cannot run.",
-                    L"Spiral Suction Saver", MB_OK | MB_ICONERROR);
+                    L"ScrKit", MB_OK | MB_ICONERROR);
     }
 
     ShowCursor(TRUE);
