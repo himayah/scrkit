@@ -39,6 +39,16 @@ jobs:
           name: ScrViewer-exe
           path: build/src/viewer/win32/Release/ScrViewer.exe
 
+      # ScrApiDemo (docs/SCRAPI_V2_DRAFT.md): a minimal, independent reference .scr that exercises
+      # every SCRAPI control pattern, including the ones ScrKit.scr itself never happens to use.
+      # Not part of ScrKit's own screensaver experience -- a developer/tester tool for exploring
+      # SCRAPI and ScrViewer with a second saver.
+      - name: Upload ScrApiDemo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrApiDemo-scr
+          path: build/src/demo/win32/Release/ScrApiDemo.scr
+
   # On a `v*` tag push, attach the just-built .scr and ScrViewer to a GitHub Release so
   # users can download a stable, versioned build without running CI themselves or
   # building locally.
@@ -59,12 +69,18 @@ jobs:
         with:
           name: ScrViewer-exe
 
+      - name: Download ScrApiDemo built by windows-build
+        uses: actions/download-artifact@v4
+        with:
+          name: ScrApiDemo-scr
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ScrKit.scr
             ScrViewer.exe
+            ScrApiDemo.scr
 
   # Platform-independent core logic (spiral math, state machine, config
   # parsing, particle grid, GPU tier classification, ...) built and unit

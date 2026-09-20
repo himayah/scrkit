@@ -772,3 +772,41 @@ v2.1.0リリース後、SCRAPI/ScrViewer開発(別ブランチ)での実機検�
   この点検の対象外として意図的に変更していない。
 - コード(`SpiralControls.cpp`/`.h`、`tests/test_SpiralControls.cpp`、`tests/scrapi_fixture.h`)
   も変更が必要だったため、ドキュメントのみの修正では済まず**v3.0.1**としてリリースした。
+
+### 9.16 ScrApiDemo.scr: SCRAPI v1の未使用パターンを網羅する独立の参照実装 (ユーザー要望)
+
+「ScrKit.scrはSCRAPIで考えられるAPIパターンを実装しているか」との問いへの調査で、v1仕様
+(`SCRAPI_SPEC.md`)が定義するコントロール型・標準コントロール・条件式のうち、ScrKit.scr自身は
+実際には使っていないものが複数見つかった: コントロール型`string`/`color`/`path`、標準コントロール
+`scrapi.fps`/`scrapi.saveToConfig`、条件式`in`/`all`/`any`/`not`(ScrKit.scrは`eq`のみ使用)、
+manifestの`apply:"restart"`プロパティ(宣言はできるが、ScrKit.scrはどのコントロールにも
+付けておらず、`ServerCore`側もこのフラグを見て自動的に何かを遅延させたりはしない――単なる
+メタデータで、意味づけはセーバー実装に委ねられている)。
+
+`tests/scrapi_fixture.h`の合成マニフェスト(ユニットテスト専用、実際に動くプロセスではない)は
+既にこれらの型を単体では網羅していたが、「本当に特定のセーバーに依存しないプロトコルか」を
+実証するには、実際に動く**もう一つの独立した`.scr`**が要る。そこで`ScrApiDemo.scr`
+(`src/demo/win32/`、状態/マニフェスト/バインダは`src/core/DemoControls.{h,cpp}`でLinux上
+ユニットテスト可能)を新設した:
+
+- v1の全11コントロール型、全7標準`scrapi.*`コントロール、全5条件式種別(`eq`/`in`/`all`/`any`/`not`)
+  を最低1箇所ずつ使用(`tests/test_DemoControls.cpp`の`DemoManifest_CoversEveryV1ControlType`等で
+  網羅を回帰テスト化)。
+- `scrapi.seed`に`apply:"restart"`を実際に付与し、ScrKit.scrとは異なる解釈で実装した:
+  値は`set`で即座にモデルへ反映される(`get`は新値を返す)が、`state_.seed`(=描画に使う値)は
+  `scrapi.restart`が呼ばれるまで更新しない。ScrKit.scrは同じ「シード変更で本当は再始動したい」
+  要求を、`apply`フラグを使わず`OnSet`内で`seed`変更のたびに直接`host_.restart`を呼ぶことで
+  実現しており、両者は正当だが異なる設計選択であることを並置で示す。
+- 描画はGDIのみ(OpenGL不使用、パーティクル/エフェクトエンジンなし)。目的はSCRAPI配線の
+  実証であって視覚的な作り込みではないため、意図的に最小限。
+- `platform::ScrApiPipe`(名前付きパイプ転送)と`scrapi::ServerCore`(プロトコルエンジン)を
+  ScrKit.scrとそのまま共有し、`platform::WinFileIO`(`scrapi.saveToConfig`の実書き込み)も
+  再利用。これらが本当にセーバーに依存しないライブラリであることの実証を兼ねる。
+  `%APPDATA%\ScrApiDemo\`という、ScrKitとは別の独自のデータフォルダを持つ(ScrKitの
+  identityを借用しない)。
+- `/s`(フルスクリーン)ではSCRAPIを一切起動しない(§7の規約どおり)。その場合は
+  `core::DemoState`の既定値(マニフェストの既定値と一致するようメンバ初期値を合わせてある)を
+  そのまま表示する。
+- CI: `windows-build`で`ScrApiDemo.scr`をビルドし、`ScrViewer-exe`と同様にアーティファクトへ
+  アップロード。タグ付きリリースにも`ScrKit.scr`/`ScrViewer.exe`と並べて添付する(開発者/検証者
+  向けのツールで、ScrKit.scr自体の体験の一部ではない点に注意)。

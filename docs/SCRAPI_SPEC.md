@@ -5,6 +5,11 @@
 > 本書は **特定のスクリーンセーバーに依存しない**汎用仕様であり、SCRAPI 対応の `.scr` と
 > 汎用ビュワー(`ScrViewer`、実装設計は [`DESIGN_VIEWER.md`](DESIGN_VIEWER.md))の間の契約だけを定義する。
 > ScrKit.scr 固有のコントロール一覧は `DESIGN_VIEWER.md` 側にある。
+>
+> 「本当に特定のセーバーに依存しないか」を実証するため、ScrKit.scr とは無関係な第二の実装
+> `ScrApiDemo.scr`(`src/demo/win32/`、`src/core/DemoControls.{h,cpp}`)がある。v1の全コントロール
+> 型・全標準 `scrapi.*` コントロール・全条件式種別を、ScrKit.scr が実際には使っていないものも
+> 含めて網羅する小さな参照実装(GDIのみの簡素な描画で、SCRAPI配線そのものが主目的)。
 
 ## 1. 目的と設計原則
 
