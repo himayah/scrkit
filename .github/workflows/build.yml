@@ -31,16 +31,17 @@ jobs:
           name: ScrKit-scr
           path: build/src/platform/win32/Release/ScrKit.scr
 
-      # The SCRAPI viewer (docs/DESIGN_VIEWER.md) -- a dev build for now; not attached to releases.
+      # The SCRAPI viewer (docs/DESIGN_VIEWER.md), merged into main and released alongside
+      # ScrKit.scr as of v3.0.0.
       - name: Upload ScrViewer artifact
         uses: actions/upload-artifact@v4
         with:
           name: ScrViewer-exe
           path: build/src/viewer/win32/Release/ScrViewer.exe
 
-  # On a `v*` tag push, attach the just-built .scr to a GitHub Release so
-  # users can download a stable, versioned build without running CI
-  # themselves or building locally.
+  # On a `v*` tag push, attach the just-built .scr and ScrViewer to a GitHub Release so
+  # users can download a stable, versioned build without running CI themselves or
+  # building locally.
   release:
     needs: windows-build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -53,10 +54,17 @@ jobs:
         with:
           name: ScrKit-scr
 
+      - name: Download ScrViewer built by windows-build
+        uses: actions/download-artifact@v4
+        with:
+          name: ScrViewer-exe
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ScrKit.scr
+          files: |
+            ScrKit.scr
+            ScrViewer.exe
 
   # Platform-independent core logic (spiral math, state machine, config
   # parsing, particle grid, GPU tier classification, ...) built and unit
