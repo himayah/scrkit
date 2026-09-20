@@ -1,5 +1,7 @@
 #include "test_framework.h"
 
+#include <algorithm>
+
 #include "../src/core/ContentMask.h"
 
 using core::BoundaryRefinement;
@@ -226,6 +228,42 @@ TEST_CASE(ContentMask_MedianGainIgnoresLargeContentOutlier) {
     CHECK(!mask[9 * gridN + 9]);
     // The window region itself should still be flagged as real content.
     CHECK(mask[0 * gridN + 0]);
+}
+
+TEST_CASE(ContentMask_GainExcludeRectsRecoverBackgroundOnAMostlyWindowedDesktop) {
+    // Real-machine case (2026-09-20): several large windows covered ~90% of the screen, so
+    // background pixels -- ContentMask_MedianGainIgnoresLargeContentOutlier's 60% "majority" --
+    // were actually the minority. The plain median gain then landed on the *window's* ratio and,
+    // applied to the whole wallpaper reference, flooded the genuinely-matching background too
+    // (measured on that capture: 17% -> 57% of true-background pixels reading as "different"
+    // before any per-cell decision even ran). Passing the OS-reported window rectangle as
+    // `gainExcludeRects` removes its pixels from the ratio sample, restoring the
+    // majority-is-background assumption the gain relies on.
+    // Wide enough that the background strip (10% of the width) still has cells safely outside the
+    // reach of even ChooseBlurRadius's largest (radius-12) box blur, which the gain contamination
+    // below would otherwise also push to its maximum trying (futilely) to explain away the mismatch.
+    const int width = 400, height = 100, gridN = 40; // 10x10px cells
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+    auto capture = SolidBuffer(width, height, 100, 100, 100);
+    FillRect(capture, width, 0, 0, 360, height, 200, 200, 200); // 90% brighter "window", cols 0-359
+    const PixelRect windowRect{0, 0, 360, height};
+    const int bgCol = 39; // rightmost cell (px 390-399), 30px clear of the window boundary at x=360
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+
+    // Without exclusion: the 90%-majority window drags the median gain to ~2.0x, which then
+    // misreads the untouched background strip as content too.
+    auto floodedMask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    CHECK(floodedMask[5 * gridN + bgCol]);
+
+    // With the window excluded from the gain sample, the background strip reads correctly again.
+    auto fixedMask = ComputeContentMask(capture.data(), wallpaper.data(), config, nullptr, nullptr, {windowRect});
+    CHECK(!fixedMask[5 * gridN + bgCol]);
+    // The window itself is still flagged either way.
+    CHECK(fixedMask[5 * gridN + 0]);
 }
 
 TEST_CASE(ContentMask_BoxBlurSuppressesPeriodicPixelNoise) {
@@ -739,30 +777,110 @@ TEST_CASE(RefineBoundaryMask_RecoversContentConcentratedInOneQuadrant) {
     CHECK(refinement.cells.count(1) == 1);
 }
 
-TEST_CASE(RefineBoundaryMask_RecoversContentVisibleOnlyAtTheDeepestLevel) {
-    // Same boundary setup, but the real content this time is a single
-    // 10x10px patch (one leaf at the default depth-3 resolution, 80/8=10px
-    // per leaf) tucked in cell(0,1)'s far corner. Its coverage reads under
-    // 30% at *every* coarser level on the way down (whole cell: 100/6400 =
-    // 1.6%; its depth-1 quadrant: 100/1600 = 6.25%; its depth-2 sub-quadrant:
-    // 100/400 = 25%) and only clears the bar at the leaf itself (100/100 =
-    // 100%) -- proving refinement doesn't stop just because an intermediate
-    // level's own verdict already happens to agree with a coarser one.
+TEST_CASE(RefineBoundaryMask_RecoversContentDilutedAtEveryCoarserLevel) {
+    // Same boundary setup, but the real content is a small 20x20px patch tucked in cell(0,1)'s far
+    // corner: 400/6400 = 6% of the whole cell and 25% of its depth-1 quadrant -- both under the 30%
+    // bar -- and only clears it at the depth-2 sub-quadrant / leaf level. It is a connected group of
+    // leaves (2x2), so it survives the noise filter and the cell is recovered.
     const int width = 160, height = 160, gridN = 2;
     auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
     auto capture = SolidBuffer(width, height, 255, 255, 255);
     FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);       // cell(0,0): fully content
-    FillRect(capture, width, 150, 0, 160, 10, 0, 0, 0);    // cell(0,1): one far-corner 10x10 leaf
+    FillRect(capture, width, 140, 0, 160, 20, 0, 0, 0);    // cell(0,1): far-corner 20x20 patch
 
     ContentMaskConfig config;
     config.screenWidth = width;
     config.screenHeight = height;
     config.gridN = gridN;
     auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
-    CHECK(!mask[1]); // coarse pass misses the tiny, deeply-diluted patch
+    CHECK(!mask[1]); // coarse pass misses the tiny, diluted patch
 
     auto refinement = RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
-    CHECK(mask[1]); // recovered anyway -- full-depth recursion, not adaptive early-stopping
+    CHECK(mask[1]);
+}
+
+TEST_CASE(RefineBoundaryMask_AnIsolatedSingleLeafIsTreatedAsNoise) {
+    // A lone 10x10px leaf that differs is indistinguishable from wallpaper texture noise; only a
+    // connected group of leaves counts as evidence of a real edge.
+    const int width = 160, height = 160, gridN = 2;
+    auto wallpaper = SolidBuffer(width, height, 255, 255, 255);
+    auto capture = SolidBuffer(width, height, 255, 255, 255);
+    FillRect(capture, width, 0, 0, 80, 80, 0, 0, 0);
+    FillRect(capture, width, 150, 0, 160, 10, 0, 0, 0);
+
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    CHECK(!mask[1]);
+}
+
+TEST_CASE(RefineBoundaryMask_SpeckleNoiseNextToAnEdgeDoesNotFloodTheSurroundings) {
+    // Real-machine bug: on a textured wallpaper, refinement promoted cells around every icon and the
+    // promotions cascaded (each promoted cell made its neighbors "boundary" cells too), turning the
+    // whole area into foreground. Reproduce with a solid block next to a large speckled area.
+    const int width = 640, height = 640, gridN = 32; // 20px cells
+    auto wallpaper = SolidBuffer(width, height, 128, 128, 128);
+    auto capture = wallpaper;
+    FillRect(capture, width, 0, 0, 100, 100, 0, 0, 0); // a real content block in the top-left
+    // Isolated texture-like speckle everywhere else: small 3x3px squares that differ strongly
+    // (a 5x5 blur still leaves them well over the pixel threshold), deterministic.
+    uint32_t state = 12345;
+    for (int n = 0; n < 2500; ++n) {
+        state = state * 1664525u + 1013904223u;
+        const int x = 110 + static_cast<int>((state >> 8) % (width - 115));
+        state = state * 1664525u + 1013904223u;
+        const int y = static_cast<int>((state >> 8) % (height - 5));
+        FillRect(capture, width, x, y, x + 3, y + 3, 255, 255, 255);
+    }
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    int before = 0;
+    for (bool b : mask) before += b ? 1 : 0;
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    int after = 0;
+    for (bool b : mask) after += b ? 1 : 0;
+    // Refinement may add at most a ring around the real block's own edge, however noisy the rest is.
+    CHECK(after <= before + 24);
+}
+
+TEST_CASE(RefineBoundaryMask_PromotionDoesNotCascadeToNeighboringCells) {
+    // One real content cell in the middle of a noisy field: only its direct neighbors are boundary
+    // cells, and promoting one of them must not make *its* neighbors boundary cells.
+    const int width = 320, height = 320, gridN = 16; // 20px cells
+    auto wallpaper = SolidBuffer(width, height, 100, 100, 100);
+    auto capture = wallpaper;
+    FillRect(capture, width, 140, 140, 180, 180, 255, 255, 255); // 2x2 cells of solid content
+    // A 6px-wide bright fringe just outside the block on its right: a genuine edge sliver.
+    FillRect(capture, width, 180, 140, 186, 180, 255, 255, 255);
+    ContentMaskConfig config;
+    config.screenWidth = width;
+    config.screenHeight = height;
+    config.gridN = gridN;
+    auto mask = ComputeContentMask(capture.data(), wallpaper.data(), config);
+    const std::vector<bool> raw = mask;
+    RefineBoundaryMask(capture.data(), wallpaper.data(), mask, config);
+    // The blur bleeds a real edge ~2px into the next cell, so a ring of directly adjacent cells may
+    // legitimately be promoted; but nothing farther than ONE cell from a cell that was content
+    // before (that would be a cascade).
+    for (int row = 0; row < gridN; ++row) {
+        for (int col = 0; col < gridN; ++col) {
+            if (!mask[static_cast<size_t>(row) * gridN + col]) continue;
+            bool nearRaw = false;
+            for (int dr = -1; dr <= 1; ++dr) {
+                for (int dc = -1; dc <= 1; ++dc) {
+                    const int r = row + dr, c = col + dc;
+                    if (r >= 0 && c >= 0 && r < gridN && c < gridN && raw[static_cast<size_t>(r) * gridN + c]) nearRaw = true;
+                }
+            }
+            CHECK(nearRaw);
+        }
+    }
 }
 
 TEST_CASE(RefineBoundaryMask_NeverDemotesAnAlreadyFlaggedCell) {
@@ -931,4 +1049,197 @@ TEST_CASE(WindowRects_MismatchedMaskSizeIsANoop) {
     ForceRectsIntoMask(tooSmall, {scene.window}, scene.config);
     for (bool cell : tooSmall) CHECK(!cell);
     CHECK(SelectEvidencedRects(tooSmall, {scene.window}, scene.config).empty());
+}
+
+namespace {
+// A 640x640 screen, 32x32 grid (20px cells): flagged cells are simulated directly in a raw mask.
+ContentMaskConfig RectScene() {
+    ContentMaskConfig c;
+    c.screenWidth = 640;
+    c.screenHeight = 640;
+    c.gridN = 32;
+    return c;
+}
+void Flag(std::vector<bool>& mask, int gridN, int col0, int row0, int col1, int row1) {
+    for (int r = row0; r < row1; ++r) {
+        for (int c = col0; c < col1; ++c) mask[static_cast<size_t>(r) * gridN + c] = true;
+    }
+}
+} // namespace
+
+TEST_CASE(WindowRects_ATransparentOverlayCannotBorrowTheEvidenceOfTheWindowsItSpans) {
+    // Real-machine bug: an invisible window whose rectangle spans two real windows and a large stretch
+    // of plain wallpaper was accepted (it "contained" plenty of flagged cells), which forced nearly the
+    // whole screen to content (11828 of 11881 cells). Its own, exclusive area is only wallpaper.
+    const ContentMaskConfig cfg = RectScene();
+    std::vector<bool> raw(32 * 32, false);
+    Flag(raw, 32, 2, 2, 12, 10);   // real window A, cells (2..12, 2..10)
+    Flag(raw, 32, 16, 4, 28, 14);  // real window B
+    const PixelRect windowA{40, 40, 240, 200};
+    const PixelRect windowB{320, 80, 560, 280};
+    const PixelRect overlay{0, 0, 640, 640}; // spans everything, including open wallpaper
+
+    std::vector<bool> accepted;
+    const auto kept = SelectEvidencedRects(raw, {windowA, windowB, overlay}, cfg, &accepted);
+    CHECK_EQ(kept.size(), static_cast<size_t>(2));
+    CHECK(accepted[0]);
+    CHECK(accepted[1]);
+    CHECK(!accepted[2]);
+}
+
+TEST_CASE(WindowRects_PartiallyOverlappingRealWindowsAreBothAccepted) {
+    const ContentMaskConfig cfg = RectScene();
+    std::vector<bool> raw(32 * 32, false);
+    Flag(raw, 32, 2, 2, 18, 14);   // A's visible strip plus B's area
+    const PixelRect a{40, 40, 300, 240};   // cells 2..15 x 2..12
+    const PixelRect b{200, 120, 400, 300}; // overlaps A's lower-right corner
+    std::vector<bool> accepted;
+    const auto kept = SelectEvidencedRects(raw, {a, b}, cfg, &accepted);
+    CHECK_EQ(kept.size(), static_cast<size_t>(2)); // each has exclusive cells with content
+}
+
+TEST_CASE(WindowRects_IdenticalRectanglesCountOnceAndAnEnclosedOneIsDropped) {
+    const ContentMaskConfig cfg = RectScene();
+    std::vector<bool> raw(32 * 32, false);
+    Flag(raw, 32, 4, 4, 20, 20);
+    const PixelRect outer{80, 80, 400, 400};
+    const PixelRect inner{160, 160, 300, 300};
+    std::vector<bool> accepted;
+    auto kept = SelectEvidencedRects(raw, {outer, outer, inner}, cfg, &accepted);
+    CHECK_EQ(kept.size(), static_cast<size_t>(1));   // the duplicate collapsed, the inner one has no exclusive cells
+    CHECK(accepted[0]);
+    CHECK(!accepted[1]);
+    CHECK(!accepted[2]);
+}
+
+TEST_CASE(FinishContentMask_ReportsStageCountsAndVerdicts) {
+    const int w = 640, h = 640;
+    auto wall = SolidBuffer(w, h, 90, 90, 90);
+    auto cap = wall;
+    FillRect(cap, w, 40, 40, 240, 200, 250, 250, 250); // one real window
+    ContentMaskConfig cfg = RectScene();
+    std::vector<float> diff;
+    auto mask = ComputeContentMask(cap.data(), wall.data(), cfg, &diff);
+    std::vector<PixelRect> used;
+    std::vector<bool> verdict;
+    core::ContentMaskStats stats;
+    FinishContentMask(cap.data(), wall.data(), mask, diff, {PixelRect{40, 40, 240, 200}, PixelRect{0, 0, 640, 640}}, cfg, &used,
+                      &verdict, &stats);
+    CHECK_EQ(used.size(), static_cast<size_t>(1));
+    CHECK(verdict.size() == 2 && verdict[0] && !verdict[1]);
+    CHECK(stats.raw > 0);
+    CHECK(stats.afterRects >= stats.raw);
+    CHECK(stats.afterStraddle >= stats.raw);
+    CHECK(stats.afterStraddle < 32 * 32 / 2); // the window, not the screen
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive blur radius: a wallpaper reference that matches the screen only approximately at fine scale
+// (real-machine bug: 94% of cells flagged on a finely textured photo before any window logic ran).
+
+namespace {
+std::vector<uint8_t> NoiseBuf(int w, int h, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    uint32_t s = seed;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        for (int c = 0; c < 3; ++c) {
+            s = s * 1664525u + 1013904223u;
+            px[i + c] = static_cast<uint8_t>(s >> 24);
+        }
+        px[i + 3] = 255;
+    }
+    return px;
+}
+// Binary high-contrast blobs of `block` px: what a fine photographic texture looks like at pixel scale.
+std::vector<uint8_t> BlobBuf(int w, int h, int block, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    const int bw = (w + block - 1) / block;
+    std::vector<uint8_t> level(static_cast<size_t>(bw) * ((h + block - 1) / block));
+    uint32_t s = seed;
+    for (auto& l : level) {
+        s = s * 1664525u + 1013904223u;
+        l = (s >> 24) & 1 ? 235 : 20;
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            uint8_t* p = &px[(static_cast<size_t>(y) * w + x) * 4];
+            p[0] = p[1] = p[2] = level[static_cast<size_t>(y / block) * bw + x / block];
+            p[3] = 255;
+        }
+    }
+    return px;
+}
+std::vector<uint8_t> ShiftedRight(const std::vector<uint8_t>& src, int w, int h, int dx) {
+    std::vector<uint8_t> out(src.size());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int sx = std::clamp(x - dx, 0, w - 1);
+            std::copy(&src[(static_cast<size_t>(y) * w + sx) * 4], &src[(static_cast<size_t>(y) * w + sx) * 4] + 4,
+                      &out[(static_cast<size_t>(y) * w + x) * 4]);
+        }
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE(ContentMask_AWellMatchedWallpaperKeepsTheOriginalBlurRadius) {
+    const int w = 320, h = 240;
+    const auto wall = NoiseBuf(w, h, 3);
+    ContentMaskConfig cfg;
+    cfg.screenWidth = w;
+    cfg.screenHeight = h;
+    cfg.gridN = 16;
+    int radius = 0;
+    ComputeContentMask(wall.data(), wall.data(), cfg, nullptr, &radius);
+    CHECK_EQ(radius, 2); // identical images: nothing to calibrate, behavior unchanged
+}
+
+TEST_CASE(ContentMask_ATexturedWallpaperOffByOnePixelIsNotReportedAsContent) {
+    // A high-contrast blob texture (4px blobs) as the wallpaper; the "screen" shows it shifted by 1px (as a slightly misaligned or
+    // differently resampled reference would) plus one real content block. With a fixed 5x5 blur nearly every
+    // cell used to be flagged; the blur now widens until the mismatch is invisible.
+    const int w = 640, h = 480;
+    const auto wall = BlobBuf(w, h, 4, 8);
+    auto capture = ShiftedRight(wall, w, h, 1);
+    FillRect(capture, w, 100, 100, 220, 200, 250, 250, 250); // one 120x100 content block
+    ContentMaskConfig cfg;
+    cfg.screenWidth = w;
+    cfg.screenHeight = h;
+    cfg.gridN = 32; // 20x15px cells
+    int radius = 0;
+    const auto mask = ComputeContentMask(capture.data(), wall.data(), cfg, nullptr, &radius);
+    CHECK(radius > 2);
+
+    int flagged = 0, inBlock = 0, blockCells = 0;
+    for (int row = 0; row < 32; ++row) {
+        for (int col = 0; col < 32; ++col) {
+            const int cx = col * w / 32 + 10, cy = row * h / 32 + 7;
+            const bool block = cx >= 100 && cx < 220 && cy >= 100 && cy < 200;
+            const bool on = mask[static_cast<size_t>(row) * 32 + col];
+            flagged += on ? 1 : 0;
+            if (block) {
+                ++blockCells;
+                inBlock += on ? 1 : 0;
+            }
+        }
+    }
+    CHECK(inBlock >= blockCells * 8 / 10);   // the real block is found
+    CHECK(flagged - inBlock < 32 * 32 / 10); // and the noise mismatch is not (under 10% of the screen outside the block)
+}
+
+TEST_CASE(ContentMask_ADesktopMostlyCoveredByWindowsIsNotMistakenForAWallpaperMismatch) {
+    // Matching reference, but ~60% of the screen is covered by opaque windows: content is concentrated,
+    // quiet tiles remain, so the blur must stay at its original radius.
+    const int w = 640, h = 480;
+    const auto wall = BlobBuf(w, h, 4, 15);
+    auto capture = wall;
+    FillRect(capture, w, 0, 0, 400, 300, 245, 245, 245);      // big window (top-left)
+    FillRect(capture, w, 250, 200, 640, 480, 30, 30, 34);     // second window, overlapping
+    ContentMaskConfig cfg;
+    cfg.screenWidth = w;
+    cfg.screenHeight = h;
+    cfg.gridN = 32;
+    int radius = 0;
+    ComputeContentMask(capture.data(), wall.data(), cfg, nullptr, &radius);
+    CHECK_EQ(radius, 2);
 }

@@ -1,5 +1,9 @@
 #include "test_framework.h"
 
+#include <algorithm>
+#include <cstdlib>
+
+#include "../src/core/ContentMask.h"
 #include "../src/core/WallpaperFit.h"
 
 using core::CompositeWallpaper;
@@ -155,4 +159,116 @@ TEST_CASE(CompositeWallpaper_StretchIgnoresAspectAndFillsWholeCanvas) {
         CHECK_EQ(PixelAt(dst, 4, 0, y)[0], static_cast<uint8_t>(255));
         CHECK_EQ(PixelAt(dst, 4, 3, y)[2], static_cast<uint8_t>(255));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Smooth resampling and 1px alignment (a finely textured wallpaper used to make the diff flag
+// nearly the whole screen, because nearest-neighbor scaling aliases it and the crop offset was only
+// searched in steps of 4px).
+
+namespace {
+std::vector<uint8_t> NoiseImage(int w, int h, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    uint32_t s = seed;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        s = s * 1664525u + 1013904223u;
+        px[i] = static_cast<uint8_t>(s >> 24);
+        s = s * 1664525u + 1013904223u;
+        px[i + 1] = static_cast<uint8_t>(s >> 24);
+        s = s * 1664525u + 1013904223u;
+        px[i + 2] = static_cast<uint8_t>(s >> 24);
+        px[i + 3] = 255;
+    }
+    return px;
+}
+// High-contrast blobs of `block` px (like a photo's speckle): neighboring pixels correlate, so being
+// 1-3px off the right alignment scores better than being far off -- a real texture's landscape.
+std::vector<uint8_t> BlobImage(int w, int h, int block, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    const int bw = (w + block - 1) / block;
+    std::vector<uint8_t> level(static_cast<size_t>(bw) * ((h + block - 1) / block));
+    uint32_t s = seed;
+    for (auto& l : level) {
+        s = s * 1664525u + 1013904223u;
+        l = (s >> 24) & 1 ? 235 : 20;
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            uint8_t* p = &px[(static_cast<size_t>(y) * w + x) * 4];
+            p[0] = p[1] = p[2] = level[static_cast<size_t>(y / block) * bw + x / block];
+            p[3] = 255;
+        }
+    }
+    return px;
+}
+} // namespace
+
+TEST_CASE(ResampleRgbaSmooth_DownscaleAveragesAndUpscaleInterpolates) {
+    // 4x4 checkerboard of 0/254 downscaled to 2x2: every output pixel is the average of a 2x2 block.
+    std::vector<uint8_t> src(4 * 4 * 4);
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const uint8_t v = ((x + y) % 2) ? 254 : 0;
+            uint8_t* p = &src[(static_cast<size_t>(y) * 4 + x) * 4];
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+    }
+    std::vector<uint8_t> dst(2 * 2 * 4);
+    core::ResampleRgbaSmooth(src.data(), 4, 4, dst.data(), 2, 2);
+    for (int i = 0; i < 4; ++i) CHECK_EQ(static_cast<int>(dst[i * 4]), 127);
+
+    // A constant image stays constant under any resize, and identity keeps every pixel.
+    std::vector<uint8_t> flat(5 * 3 * 4, 90);
+    std::vector<uint8_t> big(11 * 7 * 4);
+    core::ResampleRgbaSmooth(flat.data(), 5, 3, big.data(), 11, 7);
+    for (size_t i = 0; i < big.size(); i += 4) CHECK_EQ(static_cast<int>(big[i]), 90);
+    const auto noise = NoiseImage(16, 9, 5);
+    std::vector<uint8_t> same(noise.size());
+    core::ResampleRgbaSmooth(noise.data(), 16, 9, same.data(), 16, 9);
+    CHECK(same == noise);
+}
+
+TEST_CASE(CompositeWallpaper_FillDownscaleIsSmoothNotAliased) {
+    // A noisy 800x600 image filled into 400x300 (exactly half): each output pixel must be the average
+    // of a 2x2 source block, not one picked pixel.
+    const auto src = NoiseImage(800, 600, 11);
+    std::vector<uint8_t> dst(400 * 300 * 4);
+    core::CompositeWallpaper(src.data(), 800, 600, dst.data(), 400, 300, core::WallpaperFitMode::Fill, 0, 0, 0);
+    int maxErr = 0;
+    for (int y = 0; y < 300; y += 7) {
+        for (int x = 0; x < 400; x += 7) {
+            int sum = 0;
+            for (int dy = 0; dy < 2; ++dy) {
+                for (int dx = 0; dx < 2; ++dx) sum += src[(static_cast<size_t>(2 * y + dy) * 800 + 2 * x + dx) * 4];
+            }
+            maxErr = std::max(maxErr, std::abs(sum / 4 - static_cast<int>(dst[(static_cast<size_t>(y) * 400 + x) * 4])));
+        }
+    }
+    CHECK(maxErr <= 1);
+}
+
+TEST_CASE(CompositeWallpaperAligned_RecoversAnOffsetThatIsNotAMultipleOfTheCoarseStep) {
+    // Source 300x150 filled into 200x100 -> scaled 200x100? use an aspect mismatch so there is crop slack.
+    const int srcW = 600, srcH = 300, dstW = 200, dstH = 100;
+    const auto src = BlobImage(srcW, srcH, 9, 21);
+    // Cover-scale = max(200/600, 100/300) = 1/3 -> scaled 200x100: no slack. Make the canvas narrower.
+    const int dW = 150;
+    const float scale = std::max(static_cast<float>(dW) / srcW, static_cast<float>(dstH) / srcH);
+    const int scaledW = static_cast<int>(srcW * scale + 0.5f), scaledH = static_cast<int>(srcH * scale + 0.5f);
+    std::vector<uint8_t> scaled(static_cast<size_t>(scaledW) * scaledH * 4);
+    core::ResampleRgbaSmooth(src.data(), srcW, srcH, scaled.data(), scaledW, scaledH);
+    (void)dstW;
+    const int cropX = 7; // 7 is not a multiple of the coarse step (4)
+    std::vector<uint8_t> reference(static_cast<size_t>(dW) * dstH * 4);
+    for (int y = 0; y < dstH; ++y) {
+        for (int x = 0; x < dW; ++x) {
+            const uint8_t* p = &scaled[(static_cast<size_t>(y) * scaledW + x + cropX) * 4];
+            std::copy(p, p + 4, &reference[(static_cast<size_t>(y) * dW + x) * 4]);
+        }
+    }
+    std::vector<uint8_t> out(reference.size());
+    core::CompositeWallpaperAligned(src.data(), srcW, srcH, out.data(), dW, dstH, core::WallpaperFitMode::Fill, 0, 0, 0,
+                                     reference.data());
+    CHECK(out == reference); // exact: the search found offset -7, not the nearest multiple of 4
 }

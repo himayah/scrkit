@@ -66,6 +66,16 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
     particleHalfWidthPx_ = cellWidth * 0.55f;
     particleHalfHeightPx_ = cellHeight * 0.55f;
 
+    // Real window rectangles from the OS, gathered once up front (a pure query against
+    // screenWidth_/screenHeight_, independent of the wallpaper/capture below) so both the initial
+    // brightness-gain estimate below and the later window-rect corroboration step agree on the exact
+    // same set -- see ComputeContentMask's `gainExcludeRects` doc comment for why the gain step needs
+    // these at all: on a desktop mostly covered by open windows, background pixels are the minority,
+    // and the median-ratio gain has no other way to tell them apart from window pixels before any
+    // mask decision has been made.
+    const std::vector<core::PixelRect> candidateRects =
+        haveMatchingCapture ? EnumerateVisibleWindowRects(screenWidth_, screenHeight_) : std::vector<core::PixelRect>();
+
     // 1 (continued). Wallpaper image: decodes and composites the wallpaper
     // at `path` the same way Windows
     // actually positions/scales it (Fill/Fit/Stretch/Center/Tile), then (if
@@ -101,7 +111,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
             maskConfig.gridN = gridN_;
             attempt.mask = core::ComputeContentMask(desktopCapture->rgba.data(),
                                                       attempt.compositedWallpaper.rgba.data(), maskConfig,
-                                                      &attempt.differingFraction);
+                                                      &attempt.differingFraction, nullptr, candidateRects);
         }
         return attempt;
     };
@@ -182,8 +192,8 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
         // so a transparent overlay or invisible helper window can't turn
         // plain wallpaper into content. Runs on the raw mask, before any
         // hole filling inflates the evidence.
-        const std::vector<core::PixelRect> windowRects = core::SelectEvidencedRects(
-            attempt.mask, EnumerateVisibleWindowRects(screenWidth_, screenHeight_), maskConfig);
+        const std::vector<core::PixelRect> windowRects =
+            core::SelectEvidencedRects(attempt.mask, candidateRects, maskConfig);
         core::ForceRectsIntoMask(attempt.mask, windowRects, maskConfig);
         core::Logger::Info("AppController: " + std::to_string(windowRects.size()) +
                             " window rectangle(s) applied to the content mask");
@@ -193,7 +203,7 @@ bool AppController::Initialize(HDC hdc, int screenWidthPx, int screenHeightPx,
 
         boundaryRefinement = core::RefineBoundaryMask(desktopCapture->rgba.data(),
                                                         attempt.compositedWallpaper.rgba.data(), attempt.mask,
-                                                        maskConfig, windowRects);
+                                                        maskConfig, windowRects, candidateRects);
 
         core::FillBoundaryStraddlingCells(attempt.mask, attempt.differingFraction, gridN_);
     }
