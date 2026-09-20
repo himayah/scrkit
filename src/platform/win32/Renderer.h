@@ -43,6 +43,9 @@ void DrawFullscreenTexturedQuad(GLuint texture, int screenWidthPx, int screenHei
 // without disturbing either layer's own animation underneath).
 void DrawFullscreenBlackOverlay(int screenWidthPx, int screenHeightPx, float alpha);
 
+// A flat, alpha-blended rectangle in screen pixels (debug overlays).
+void DrawColoredRect(float x, float y, float w, float h, float r, float g, float b, float a);
+
 // Draws every particle in one glBegin(GL_QUADS)/glEnd batch, sampling from
 // `texture`. `halfWidthPx`/`halfHeightPx` are the fixed half-width/height of
 // every particle quad (要件.txt §7: 粒子サイズは固定にする) -- kept separate

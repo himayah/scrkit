@@ -58,6 +58,31 @@ public:
     void Update(float dtSeconds);
     void Draw() const;
 
+    // External-control access (SCRAPI preview, docs/DESIGN_VIEWER.md §B.3). Null before
+    // Initialize() succeeds.
+    core::fx::EffectEngine* Engine() { return effectEngine_.get(); }
+    // false: hold STATE_CONTENT indefinitely (the blackout/fade cycle never starts), so
+    // an effect pinned for inspection isn't interrupted. Default true (normal saver).
+    void SetAutoCycle(bool enabled) { autoCycle_ = enabled; }
+
+    // SCRAPI preview only. "sample": the foreground shows a built-in desktop (two windows, icons,
+    // a taskbar) run through the real mask pipeline; anything else: an empty foreground.
+    void ApplyContentSource(const std::string& source);
+    // Tints the cells detected as content and outlines the window rectangles.
+    void SetMaskOverlay(bool on) { maskOverlay_ = on; }
+    // The SCRAPI viewer's preview window: its top-level window is hidden for the moment a real
+    // desktop capture is taken, so the viewer itself doesn't end up in the "desktop".
+    void SetCaptureHost(HWND previewWindow) { captureHost_ = previewWindow; }
+    // Re-runs the current content source ("Capture again" for the real desktop).
+    void RefreshContent() { ApplyContentSource(contentSource_); }
+    // Diagnostics: writes the last real desktop capture and the wallpaper reference the mask diff used
+    // as BMPs into the app's data folder (debug_capture.bmp, debug_reference.bmp).
+    void DumpDebugImages() const;
+    // Reseeds the random source and starts the show over (both layers, from the beginning).
+    void Restart(uint32_t seed);
+    // One-line description of what the foreground currently contains.
+    const std::string& ContentInfo() const { return contentInfo_; }
+
     void Shutdown();
 
 private:
@@ -110,6 +135,24 @@ private:
     // design: the two layers' effect switches are meant to stay unsynced).
     float blackoutTimer_ = 0.0f;
     float blackoutTargetSeconds_ = 0.0f;
+    bool autoCycle_ = true;
+
+    // Kept so the foreground can be rebuilt later (SCRAPI preview): the wallpaper as composited to
+    // the screen size, and what the mask overlay draws.
+    std::vector<uint8_t> wallpaperRgba_;
+    bool maskOverlay_ = false;
+    struct OverlayRect {
+        float x, y, w, h;
+    };
+    std::vector<OverlayRect> overlayCells_;
+    std::vector<OverlayRect> overlayWindows_;
+    std::string contentInfo_ = "none";
+    std::string contentSource_ = "sample";
+    HWND captureHost_ = nullptr;
+    DecodedImage lastCapture_;             // the last real desktop capture (for the debug dump)
+    std::wstring wallpaperPath_;           // for recompositing the wallpaper against a fresh capture
+    uint8_t desktopColor_[3] = {30, 40, 60};
+    bool previewMode_ = false;
     // Basis for blackoutTargetSeconds_'s random draw: roughly 10x a single
     // effect's typical duration (the midpoint of fg/bg's own
     // defaultMinSeconds/defaultMaxSeconds, averaged across both layers),
@@ -117,6 +160,14 @@ private:
     // entry then draws uniformly from [0.7, 1.3] x this, so the interval
     // itself is never a fixed number (要望どおり).
     float blackoutBaseSeconds_ = 75.0f;
+
+    // Rebuilds the foreground layer from `capture` (null = empty): mask, texture, cells, and hands
+    // the new layer to the engine. `candidateRects` are window rectangles for the mask pipeline.
+    void SetForegroundContent(const DecodedImage* capture, const std::vector<core::PixelRect>& candidateRects,
+                               const std::vector<std::string>* candidateLabels = nullptr);
+    core::fx::LayerSource MakeForegroundSource(const std::vector<int>& cellIndices, bool hasContent) const;
+    void DrawMaskOverlay() const;
+    void CaptureDesktopContent();
 
     void PickNewBlackoutTarget();
     void OnStateEntered(core::SaverState newState);

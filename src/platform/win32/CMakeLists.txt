@@ -14,6 +14,8 @@ set(WIN32_SOURCES
     OpenGLContext.cpp
     Renderer.cpp
     SaverWindow.cpp
+    ScrApiHost.cpp
+    ScrApiPipe.cpp
     ScreenCapture.cpp
     WallpaperProvider.cpp
     WinFileIO.cpp

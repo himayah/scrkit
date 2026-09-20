@@ -18,7 +18,7 @@ constexpr DWORD kDwmwaExtendedFrameBounds = 9;
 constexpr DWORD kDwmwaCloaked = 14;
 
 struct EnumContext {
-    std::vector<core::PixelRect>* out;
+    std::vector<WindowInfo>* out;
     DWORD ownProcessId;
     // physicalToProcess: multiply a physical-pixel coordinate (what DWM
     // always reports) by this to get the coordinate space the screen capture
@@ -93,7 +93,18 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     r.bottom = std::min(static_cast<int>(rect.bottom), ctx->screenHeight);
     if (r.right <= r.left || r.bottom <= r.top) return TRUE;
 
-    ctx->out->push_back(r);
+    WindowInfo info;
+    info.rect = r;
+    info.exStyle = static_cast<unsigned long>(exStyle);
+    wchar_t cls[96] = {};
+    if (GetClassNameW(hwnd, cls, 96) > 0) {
+        const int n = WideCharToMultiByte(CP_UTF8, 0, cls, -1, nullptr, 0, nullptr, nullptr);
+        if (n > 1) {
+            info.className.assign(static_cast<size_t>(n) - 1, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, cls, -1, &info.className[0], n, nullptr, nullptr);
+        }
+    }
+    ctx->out->push_back(std::move(info));
     return TRUE;
 }
 
@@ -114,14 +125,20 @@ double PhysicalToProcessScale() {
 
 } // namespace
 
-std::vector<core::PixelRect> EnumerateVisibleWindowRects(int screenWidth, int screenHeight) {
-    std::vector<core::PixelRect> rects;
-    if (screenWidth <= 0 || screenHeight <= 0) return rects;
+std::vector<WindowInfo> EnumerateVisibleWindows(int screenWidth, int screenHeight) {
+    std::vector<WindowInfo> windows;
+    if (screenWidth <= 0 || screenHeight <= 0) return windows;
 
-    EnumContext ctx{&rects, GetCurrentProcessId(), PhysicalToProcessScale(), screenWidth, screenHeight};
+    EnumContext ctx{&windows, GetCurrentProcessId(), PhysicalToProcessScale(), screenWidth, screenHeight};
     if (!EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&ctx))) {
         core::Logger::Warn("WindowRects: EnumWindows failed; continuing with whatever was collected");
     }
+    return windows;
+}
+
+std::vector<core::PixelRect> EnumerateVisibleWindowRects(int screenWidth, int screenHeight) {
+    std::vector<core::PixelRect> rects;
+    for (const WindowInfo& w : EnumerateVisibleWindows(screenWidth, screenHeight)) rects.push_back(w.rect);
     return rects;
 }
 
